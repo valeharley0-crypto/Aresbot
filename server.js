@@ -19,6 +19,24 @@ const TWELVEDATA_API_KEY =
 
 
 /* =========================
+   NEWS MODULE (ajout)
+   - routes /api/news/*
+   - fichier front news-module.js (servi explicitement, sans exposer le reste du dossier)
+   - garde TRADE_BLOCKED_NEWS devant /api/robot/execute
+   Doit rester AVANT le ROBOT MODULE pour que la garde passe en premier.
+========================= */
+
+const news = require("./news-routes")(app);
+
+app.get("/news-module.js", (req, res) => {
+  res.type("application/javascript");
+  res.sendFile(path.join(__dirname, "news-module.js"));
+});
+
+app.use("/api/robot/execute", news.newsGuard);
+
+
+/* =========================
    ROBOT MODULE
 ========================= */
 
@@ -394,6 +412,17 @@ app.post(
     }
 
 
+    /* NEWS PROTECTION (ajout) :
+       pendant une fenêtre HIGH IMPACT, le signal reste enregistré et visible,
+       mais n'est PAS exécuté (ni robot, ni EA). Il n'est pas rejoué après la pause. */
+
+    const newsPause = news.getPause();
+
+    if (newsPause.paused) {
+      normalized.status = "BLOCKED_NEWS";
+    }
+
+
     /* Save latest signal */
 
     latestSignal =
@@ -403,6 +432,22 @@ app.post(
     /* =========================
        SEND SIGNAL TO ROBOT
     ========================= */
+
+    if (newsPause.paused) {
+
+      console.log(
+        `TRADE_BLOCKED_NEWS: signal ${normalized.id} non exécuté (${newsPause.event.name})`
+      );
+
+      return res.json({
+        ok: true,
+        accepted: true,
+        id: normalized.id,
+        robot: "TRADE_BLOCKED_NEWS",
+        news: newsPause.event.name,
+        resumeAt: new Date(newsPause.resumeAt).toISOString()
+      });
+    }
 
     try {
 
@@ -470,6 +515,22 @@ app.get(
       return res.status(401).json({
         ok: false,
         error: "unauthorized"
+      });
+    }
+
+    /* NEWS PROTECTION (ajout) : l'EA ne reçoit aucun signal pendant la pause,
+       ni un signal marqué BLOCKED_NEWS après la pause. */
+
+    const pause = news.getPause();
+
+    if (
+      pause.paused ||
+      (latestSignal && latestSignal.status === "BLOCKED_NEWS")
+    ) {
+      return res.json({
+        ok: true,
+        signal: null,
+        blocked: "TRADE_BLOCKED_NEWS"
       });
     }
 
