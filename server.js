@@ -32,9 +32,6 @@ app.get('/news-module.js', (req, res) => {
   );
 });
 
-/*
-  NEWS GUARD doit être placé avant le ROBOT.
-*/
 app.use(
   '/api/robot/execute',
   news.newsGuard
@@ -134,29 +131,40 @@ function validateSignal(s) {
 
 
 /* =========================================================
-   TWELVEDATA CACHE + RATE LIMIT
+   TWELVEDATA
 =========================================================
 
-   Plan actuel :
-   8 crédits/minute
+   Plan utilisateur :
+   8 crédits/minute.
 
    Sécurité :
-   maximum 6 requêtes upstream/minute.
+   6 appels maximum par fenêtre.
 
-   Les 2 crédits restants servent de marge de sécurité.
-
+   IMPORTANT :
+   - LIVE utilise le cache et ne force pas une attente.
+   - BACKTEST / historique attend la prochaine fenêtre
+     lorsque le quota est atteint.
 ========================================================= */
 
 const TD_CACHE = new Map();
 const TD_INFLIGHT = new Map();
 
+/*
+  Une fenêtre TwelveData.
+*/
 const TD_WINDOW = {
   started: Date.now(),
   used: 0
 };
 
+/*
+  On garde 2 crédits de sécurité.
+*/
 const TD_SAFE_LIMIT = 6;
 
+/*
+  Cache TTL.
+*/
 const TD_TTL_MS = {
   quote: 30 * 1000,
   price: 30 * 1000,
@@ -173,7 +181,7 @@ const TD_ALLOWED = new Set([
 
 
 /* =========================================================
-   RESET RATE WINDOW
+   RESET WINDOW
 ========================================================= */
 
 function tdWindowReset() {
@@ -189,14 +197,76 @@ function tdWindowReset() {
 
 
 /* =========================================================
+   WAIT FOR NEXT WINDOW
+========================================================= */
+
+function tdWaitMs() {
+  tdWindowReset();
+
+  const elapsed =
+    Date.now() - TD_WINDOW.started;
+
+  const remaining =
+    60000 - elapsed;
+
+  /*
+    Petite marge pour laisser TwelveData
+    réinitialiser correctement son compteur.
+  */
+  return Math.max(
+    1000,
+    remaining + 1000
+  );
+}
+
+
+function sleep(ms) {
+  return new Promise(resolve => {
+    setTimeout(resolve, ms);
+  });
+}
+
+
+/* =========================================================
+   DETECT HISTORICAL / BACKTEST REQUEST
+========================================================= */
+
+function isHistoricalRequest(params) {
+  /*
+    Un appel time_series avec start_date/end_date
+    est considéré comme historique.
+
+    outputsize élevé est également traité comme historique.
+  */
+
+  if (
+    params.start_date ||
+    params.end_date
+  ) {
+    return true;
+  }
+
+  if (
+    params.outputsize &&
+    Number(params.outputsize) > 100
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+
+/* =========================================================
    CACHE KEY
 ========================================================= */
 
 function tdKey(endpoint, params) {
-  const sorted = Object.entries(params)
-    .sort(([a], [b]) =>
-      a.localeCompare(b)
-    );
+  const sorted =
+    Object.entries(params)
+      .sort(([a], [b]) =>
+        a.localeCompare(b)
+      );
 
   return (
     endpoint +
@@ -212,6 +282,59 @@ function tdKey(endpoint, params) {
 
 
 /* =========================================================
+   CACHE CLEANUP
+========================================================= */
+
+function cleanupCache() {
+  const now = Date.now();
+
+  for (
+    const [key, item]
+    of TD_CACHE.entries()
+  ) {
+
+    const ttl =
+      TD_TTL_MS[item.endpoint] ||
+      60000;
+
+    if (
+      now - item.at > ttl
+    ) {
+      TD_CACHE.delete(key);
+    }
+  }
+
+  /*
+    Protection mémoire :
+    on garde au maximum 300 entrées.
+  */
+
+  if (TD_CACHE.size > 300) {
+
+    const entries =
+      [...TD_CACHE.entries()]
+        .sort(
+          (a, b) =>
+            a[1].at - b[1].at
+        );
+
+    const removeCount =
+      TD_CACHE.size - 300;
+
+    for (
+      let i = 0;
+      i < removeCount;
+      i++
+    ) {
+      TD_CACHE.delete(
+        entries[i][0]
+      );
+    }
+  }
+}
+
+
+/* =========================================================
    TWELVEDATA REQUEST
 ========================================================= */
 
@@ -219,40 +342,75 @@ async function fetchTwelveData(
   endpoint,
   params
 ) {
-  tdWindowReset();
 
-  const key = tdKey(
-    endpoint,
-    params
-  );
+  if (!TWELVEDATA_API_KEY) {
+    const error =
+      new Error(
+        'TWELVEDATA_API_KEY is missing'
+      );
+
+    error.code =
+      'TD_NO_API_KEY';
+
+    throw error;
+  }
+
+
+  const key =
+    tdKey(
+      endpoint,
+      params
+    );
+
 
   const ttl =
     TD_TTL_MS[endpoint] ||
     60000;
 
-  const now = Date.now();
 
-  /* ---------- CACHE ---------- */
+  const historical =
+    isHistoricalRequest(
+      params
+    );
+
+
+  /* -------------------------------------------------------
+     CACHE
+  ------------------------------------------------------- */
 
   const cached =
     TD_CACHE.get(key);
 
+
   if (
     cached &&
-    now - cached.at < ttl
+    Date.now() - cached.at < ttl
   ) {
+
     return {
-      data: cached.data,
+      data:
+        cached.data,
+
       usage: {
-        used: TD_WINDOW.used,
-        cached: true
+        used:
+          TD_WINDOW.used,
+
+        limit:
+          TD_SAFE_LIMIT,
+
+        cached: true,
+
+        historical
       },
+
       stale: false
     };
   }
 
 
-  /* ---------- SAME REQUEST ALREADY RUNNING ---------- */
+  /* -------------------------------------------------------
+     SAME REQUEST ALREADY RUNNING
+  ------------------------------------------------------- */
 
   if (
     TD_INFLIGHT.has(key)
@@ -261,112 +419,335 @@ async function fetchTwelveData(
   }
 
 
-  /* ---------- RATE LIMIT ---------- */
+  /* -------------------------------------------------------
+     CREATE REQUEST
+  ------------------------------------------------------- */
 
-  if (
-    TD_WINDOW.used >=
-    TD_SAFE_LIMIT
-  ) {
-    /*
-      Si une ancienne donnée existe,
-      on peut la retourner en mode stale.
-    */
+  const promise =
+    (async () => {
 
-    if (cached) {
-      return {
-        data: cached.data,
-        usage: {
-          used: TD_WINDOW.used,
-          cached: true
-        },
-        stale: true
-      };
-    }
+      /*
+        BACKTEST / HISTORIQUE :
 
-    const error =
-      new Error(
-        'TwelveData safe rate limit reached. Please retry after the cache window.'
-      );
+        Si le quota est atteint,
+        on attend automatiquement
+        la prochaine fenêtre.
 
-    error.code =
-      'TD_RATE_LIMIT';
+        LIVE :
 
-    throw error;
-  }
+        Si quota atteint et ancien cache existe,
+        on utilise le cache.
+
+        S'il n'y a pas de cache,
+        on attend également plutôt que
+        de fabriquer des données.
+      */
+
+      while (true) {
+
+        tdWindowReset();
 
 
-  /* ---------- CREATE REQUEST ---------- */
-
-  const promise = (async () => {
-    TD_WINDOW.used++;
-
-    const query =
-      new URLSearchParams({
-        ...params,
-        apikey:
-          TWELVEDATA_API_KEY
-      });
-
-    const url =
-      `https://api.twelvedata.com/${endpoint}?${query.toString()}`;
-
-    const response =
-      await fetch(url);
-
-    const data =
-      await response.json();
+        if (
+          TD_WINDOW.used <
+          TD_SAFE_LIMIT
+        ) {
+          break;
+        }
 
 
-    /* ---------- TWELVEDATA ERROR ---------- */
+        /*
+          Si on possède une ancienne donnée,
+          elle peut être utilisée temporairement
+          pour le LIVE.
 
-    if (
-      !response.ok ||
-      (
-        data &&
-        (
-          data.status === 'error' ||
-          data.code
-        )
-      )
-    ) {
-      const error =
-        new Error(
-          data?.message ||
-          'TwelveData request failed'
+          Pour le backtest, on attend toujours
+          car les données historiques doivent être
+          exactes.
+        */
+
+        if (
+          cached &&
+          !historical
+        ) {
+
+          return {
+            data:
+              cached.data,
+
+            usage: {
+              used:
+                TD_WINDOW.used,
+
+              limit:
+                TD_SAFE_LIMIT,
+
+              cached: true,
+
+              historical: false
+            },
+
+            stale: true
+          };
+        }
+
+
+        const wait =
+          tdWaitMs();
+
+
+        console.log(
+          `[TwelveData] quota atteint. ` +
+          `Attente ${Math.ceil(wait / 1000)}s ` +
+          `(historique=${historical})`
         );
 
-      error.code =
-        'TD_UPSTREAM_ERROR';
 
-      error.status =
-        response.status || 400;
-
-      error.data = data;
-
-      throw error;
-    }
-
-
-    /* ---------- SAVE CACHE ---------- */
-
-    TD_CACHE.set(
-      key,
-      {
-        at: Date.now(),
-        data
+        await sleep(wait);
       }
-    );
 
 
-    return {
-      data,
-      usage: {
-        used: TD_WINDOW.used,
-        cached: false
-      },
-      stale: false
-    };
-  })();
+      /*
+        On réserve un crédit.
+      */
+
+      TD_WINDOW.used++;
+
+
+      const query =
+        new URLSearchParams({
+          ...params,
+
+          apikey:
+            TWELVEDATA_API_KEY
+        });
+
+
+      const url =
+        `https://api.twelvedata.com/${endpoint}?${query.toString()}`;
+
+
+      let response;
+
+      try {
+
+        response =
+          await fetch(url);
+
+      } catch (networkError) {
+
+        /*
+          Si le réseau échoue, on ne fabrique
+          jamais de données.
+        */
+
+        const error =
+          new Error(
+            'TwelveData network connection failed'
+          );
+
+        error.code =
+          'TD_NETWORK_ERROR';
+
+        throw error;
+      }
+
+
+      let data;
+
+      try {
+
+        data =
+          await response.json();
+
+      } catch (jsonError) {
+
+        const error =
+          new Error(
+            'Invalid TwelveData response'
+          );
+
+        error.code =
+          'TD_BAD_RESPONSE';
+
+        throw error;
+      }
+
+
+      /* ---------------------------------------------------
+         UPSTREAM RATE LIMIT
+      --------------------------------------------------- */
+
+      const message =
+        String(
+          data?.message || ''
+        ).toLowerCase();
+
+
+      const rateLimited =
+        response.status === 429 ||
+        message.includes(
+          'api credits'
+        ) ||
+        message.includes(
+          'rate limit'
+        ) ||
+        message.includes(
+          'credits'
+        );
+
+
+      if (rateLimited) {
+
+        /*
+          Le compteur local peut être différent
+          du compteur TwelveData.
+
+          On force donc la prochaine fenêtre.
+        */
+
+        TD_WINDOW.started =
+          Date.now();
+
+        TD_WINDOW.used =
+          TD_SAFE_LIMIT;
+
+
+        /*
+          Backtest :
+          attendre puis réessayer.
+
+          LIVE :
+          cache stale si disponible,
+          sinon attendre aussi.
+        */
+
+        if (
+          cached &&
+          !historical
+        ) {
+
+          return {
+            data:
+              cached.data,
+
+            usage: {
+              used:
+                TD_WINDOW.used,
+
+              limit:
+                TD_SAFE_LIMIT,
+
+              cached: true,
+
+              historical: false
+            },
+
+            stale: true
+          };
+        }
+
+
+        const wait =
+          tdWaitMs();
+
+
+        console.log(
+          `[TwelveData] upstream rate limit. ` +
+          `Retry dans ${Math.ceil(wait / 1000)}s`
+        );
+
+
+        await sleep(wait);
+
+
+        /*
+          Recommencer la même requête
+          après reset.
+        */
+
+        return fetchTwelveData(
+          endpoint,
+          params
+        );
+      }
+
+
+      /* ---------------------------------------------------
+         OTHER API ERROR
+      --------------------------------------------------- */
+
+      if (
+        !response.ok ||
+        (
+          data &&
+          (
+            data.status === 'error' ||
+            data.code
+          )
+        )
+      ) {
+
+        const error =
+          new Error(
+            data?.message ||
+            'TwelveData request failed'
+          );
+
+        error.code =
+          'TD_UPSTREAM_ERROR';
+
+        error.status =
+          response.status || 400;
+
+        error.data =
+          data;
+
+        throw error;
+      }
+
+
+      /* ---------------------------------------------------
+         SAVE CACHE
+      --------------------------------------------------- */
+
+      TD_CACHE.set(
+        key,
+        {
+          at:
+            Date.now(),
+
+          endpoint,
+
+          data
+        }
+      );
+
+
+      cleanupCache();
+
+
+      return {
+
+        data,
+
+        usage: {
+
+          used:
+            TD_WINDOW.used,
+
+          limit:
+            TD_SAFE_LIMIT,
+
+          cached: false,
+
+          historical
+        },
+
+        stale: false
+      };
+
+    })();
 
 
   TD_INFLIGHT.set(
@@ -374,10 +755,16 @@ async function fetchTwelveData(
     promise
   );
 
+
   try {
+
     return await promise;
+
   } finally {
-    TD_INFLIGHT.delete(key);
+
+    TD_INFLIGHT.delete(
+      key
+    );
   }
 }
 
@@ -386,53 +773,70 @@ async function fetchTwelveData(
    HOME
 ========================================================= */
 
-app.get('/', (req, res) => {
-  res.sendFile(
-    path.join(
-      __dirname,
-      'index.html'
-    )
-  );
-});
+app.get(
+  '/',
+  (req, res) => {
+
+    res.sendFile(
+      path.join(
+        __dirname,
+        'index.html'
+      )
+    );
+
+  }
+);
 
 
 /* =========================================================
    HEALTH
 ========================================================= */
 
-app.get('/health', (req, res) => {
-  tdWindowReset();
+app.get(
+  '/health',
+  (req, res) => {
 
-  res.json({
-    ok: true,
+    tdWindowReset();
 
-    service:
-      'ares-trade-bridge',
+    res.json({
 
-    signal:
-      latestSignal
-        ? latestSignal.id
-        : null,
+      ok: true,
 
-    lastAck,
+      service:
+        'ares-trade-bridge',
 
-    twelvedata: {
-      used:
-        TD_WINDOW.used,
+      signal:
+        latestSignal
+          ? latestSignal.id
+          : null,
 
-      safeLimit:
-        TD_SAFE_LIMIT,
+      lastAck,
 
-      cacheEntries:
-        TD_CACHE.size,
+      twelvedata: {
 
-      windowStarted:
-        new Date(
-          TD_WINDOW.started
-        ).toISOString()
-    }
-  });
-});
+        used:
+          TD_WINDOW.used,
+
+        safeLimit:
+          TD_SAFE_LIMIT,
+
+        cacheEntries:
+          TD_CACHE.size,
+
+        inflight:
+          TD_INFLIGHT.size,
+
+        windowStarted:
+          new Date(
+            TD_WINDOW.started
+          ).toISOString()
+
+      }
+
+    });
+
+  }
+);
 
 
 /* =========================================================
@@ -442,16 +846,8 @@ app.get('/health', (req, res) => {
 app.get(
   '/api/td/:endpoint',
   async (req, res) => {
+
     try {
-
-      if (!TWELVEDATA_API_KEY) {
-        return res.status(500).json({
-          ok: false,
-          error:
-            'TWELVEDATA_API_KEY is missing'
-        });
-      }
-
 
       const endpoint =
         String(
@@ -460,54 +856,77 @@ app.get(
 
 
       if (
-        !TD_ALLOWED.has(endpoint)
+        !TD_ALLOWED.has(
+          endpoint
+        )
       ) {
+
         return res.status(400).json({
+
           ok: false,
+
           error:
             'unsupported_endpoint'
+
         });
+
       }
 
 
-      /*
-        XAU/USD est imposé côté serveur.
-      */
-
       const params = {
-        symbol: 'XAU/USD'
+
+        /*
+          XAU/USD fixe côté serveur.
+        */
+
+        symbol:
+          'XAU/USD'
+
       };
 
 
       /*
-        Paramètres autorisés uniquement.
+        Paramètres autorisés.
       */
 
       const allowedParams = [
+
         'interval',
+
         'outputsize',
+
         'timezone',
+
         'start_date',
+
         'end_date',
+
         'format',
+
         'dp',
+
         'order'
+
       ];
 
 
       for (
-        const key of allowedParams
+        const key
+        of allowedParams
       ) {
 
         if (
           req.query[key] !== undefined &&
           req.query[key] !== ''
         ) {
+
           params[key] =
             String(
               req.query[key]
             );
+
         }
+
       }
 
 
@@ -519,6 +938,7 @@ app.get(
 
 
       return res.json({
+
         ok: true,
 
         data:
@@ -529,6 +949,7 @@ app.get(
 
         stale:
           result.stale
+
       });
 
     } catch (error) {
@@ -539,36 +960,24 @@ app.get(
       );
 
 
-      if (
-        error.code ===
-        'TD_RATE_LIMIT'
-      ) {
-        return res.status(429).json({
-          ok: false,
-
-          error:
-            'TWELVEDATA_RATE_LIMIT',
-
-          message:
-            error.message
-        });
-      }
-
-
       return res.status(
         error.status || 500
       ).json({
+
         ok: false,
 
         error:
-          error.message ||
-          'TwelveData connection failed',
+          error.code ||
+          'TWELVEDATA_ERROR',
 
-        data:
-          error.data ||
-          undefined
+        message:
+          error.message ||
+          'TwelveData connection failed'
+
       });
+
     }
+
   }
 );
 
@@ -593,11 +1002,16 @@ app.post(
         WEBHOOK_SECRET
       )
     ) {
+
       return res.status(401).json({
+
         ok: false,
+
         error:
           'unauthorized'
+
       });
+
     }
 
 
@@ -606,57 +1020,82 @@ app.post(
 
 
     const validationError =
-      validateSignal(signal);
+      validateSignal(
+        signal
+      );
 
 
     if (validationError) {
+
       return res.status(400).json({
+
         ok: false,
+
         error:
           validationError
+
       });
+
     }
 
 
     const normalized = {
 
       id:
-        String(signal.id),
+        String(
+          signal.id
+        ),
 
       symbol:
-        String(signal.symbol),
+        String(
+          signal.symbol
+        ),
 
       side:
-        String(signal.side)
-          .toUpperCase(),
+        String(
+          signal.side
+        ).toUpperCase(),
 
       orderType:
-        String(signal.orderType)
-          .toUpperCase(),
+        String(
+          signal.orderType
+        ).toUpperCase(),
 
       entry:
-        Number(signal.entry),
+        Number(
+          signal.entry
+        ),
 
       sl:
-        Number(signal.sl),
+        Number(
+          signal.sl
+        ),
 
       tp1:
-        Number(signal.tp1),
+        Number(
+          signal.tp1
+        ),
 
       tp2:
         signal.tp2 == null
           ? null
-          : Number(signal.tp2),
+          : Number(
+              signal.tp2
+            ),
 
       tp3:
         signal.tp3 == null
           ? null
-          : Number(signal.tp3),
+          : Number(
+              signal.tp3
+            ),
 
       volume:
         signal.volume == null
           ? null
-          : Number(signal.volume),
+          : Number(
+              signal.volume
+            ),
 
       riskPercent:
         signal.riskPercent == null
@@ -675,12 +1114,16 @@ app.post(
       tf:
         signal.tf == null
           ? null
-          : String(signal.tf),
+          : String(
+              signal.tf
+            ),
 
       magic:
         signal.magic == null
           ? 260926
-          : Number(signal.magic),
+          : Number(
+              signal.magic
+            ),
 
       createdAt:
         signal.createdAt ||
@@ -688,34 +1131,49 @@ app.post(
 
       status:
         'NEW'
+
     };
 
 
-    /* ---------- DUPLICATE ---------- */
+    /* ---------------------------------------------------
+       DUPLICATE PROTECTION
+    --------------------------------------------------- */
 
     if (
       latestSignal &&
       latestSignal.id ===
         normalized.id
     ) {
+
       return res.json({
+
         ok: true,
+
         duplicate: true,
+
         id:
           normalized.id
+
       });
+
     }
 
 
-    /* ---------- NEWS ---------- */
+    /* ---------------------------------------------------
+       NEWS PROTECTION
+    --------------------------------------------------- */
 
     const pause =
       news.getPause();
 
 
-    if (pause.paused) {
+    if (
+      pause.paused
+    ) {
+
       normalized.status =
         'BLOCKED_NEWS';
+
     }
 
 
@@ -723,12 +1181,19 @@ app.post(
       normalized;
 
 
-    /* ---------- BLOCK DURING NEWS ---------- */
+    /* ---------------------------------------------------
+       BLOCK NEWS
+    --------------------------------------------------- */
 
-    if (pause.paused) {
+    if (
+      pause.paused
+    ) {
 
       console.log(
-        `TRADE_BLOCKED_NEWS: signal ${normalized.id} non exécuté (${pause.event.name})`
+        `TRADE_BLOCKED_NEWS: ` +
+        `signal ${normalized.id} ` +
+        `non exécuté ` +
+        `(${pause.event.name})`
       );
 
 
@@ -751,11 +1216,15 @@ app.post(
           new Date(
             pause.resumeAt
           ).toISOString()
+
       });
+
     }
 
 
-    /* ---------- DISPATCH ROBOT ---------- */
+    /* ---------------------------------------------------
+       ROBOT DISPATCH
+    --------------------------------------------------- */
 
     try {
 
@@ -784,6 +1253,7 @@ app.post(
 
         tp3:
           normalized.tp3
+
       });
 
     } catch (error) {
@@ -792,6 +1262,7 @@ app.post(
         'Robot dispatch error:',
         error
       );
+
     }
 
 
@@ -803,7 +1274,9 @@ app.post(
 
       id:
         normalized.id
+
     });
+
   }
 );
 
@@ -828,21 +1301,27 @@ app.get(
         EA_TOKEN
       )
     ) {
+
       return res.status(401).json({
+
         ok: false,
+
         error:
           'unauthorized'
+
       });
+
     }
 
-
-    /*
-      NEWS BLOCK
-    */
 
     const pause =
       news.getPause();
 
+
+    /*
+      Pendant une news HIGH IMPACT,
+      aucun signal n'est envoyé à l'EA.
+    */
 
     if (
       pause.paused ||
@@ -861,7 +1340,9 @@ app.get(
 
         blocked:
           'TRADE_BLOCKED_NEWS'
+
       });
+
     }
 
 
@@ -871,7 +1352,9 @@ app.get(
 
       signal:
         latestSignal
+
     });
+
   }
 );
 
@@ -896,11 +1379,16 @@ app.post(
         EA_TOKEN
       )
     ) {
+
       return res.status(401).json({
+
         ok: false,
+
         error:
           'unauthorized'
+
       });
+
     }
 
 
@@ -908,22 +1396,30 @@ app.post(
       id,
       status,
       message
-    } = req.body || {};
+    } =
+      req.body || {};
 
 
     lastAck = {
 
       id:
-        String(id || ''),
+        String(
+          id || ''
+        ),
 
       status:
-        String(status || ''),
+        String(
+          status || ''
+        ),
 
       message:
-        String(message || ''),
+        String(
+          message || ''
+        ),
 
       at:
         new Date().toISOString()
+
     };
 
 
@@ -935,12 +1431,16 @@ app.post(
 
       latestSignal.status =
         lastAck.status;
+
     }
 
 
     return res.json({
+
       ok: true
+
     });
+
   }
 );
 
