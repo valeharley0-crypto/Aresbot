@@ -11,1451 +11,1241 @@ app.use(express.json({ limit: '32kb' }));
 const PORT = process.env.PORT || 8080;
 
 const WEBHOOK_SECRET =
-  process.env.WEBHOOK_SECRET || 'CHANGE_ME_WEBHOOK_SECRET';
+process.env.WEBHOOK_SECRET || 'CHANGE_ME_WEBHOOK_SECRET';
 
 const EA_TOKEN =
-  process.env.EA_TOKEN || 'CHANGE_ME_EA_TOKEN';
+process.env.EA_TOKEN || 'CHANGE_ME_EA_TOKEN';
 
 const TWELVEDATA_API_KEY =
-  process.env.TWELVEDATA_API_KEY || '';
+process.env.TWELVEDATA_API_KEY || '';
 
 /* =========================================================
-   NEWS MODULE
+NEWS MODULE
 ========================================================= */
 
 const news = require('./news-routes')(app);
 
 app.get('/news-module.js', (req, res) => {
-  res.type('application/javascript');
-  res.sendFile(
-    path.join(__dirname, 'news-module.js')
-  );
+res.type('application/javascript');
+res.sendFile(
+path.join(__dirname, 'news-module.js')
+);
 });
 
 app.use(
-  '/api/robot/execute',
-  news.newsGuard
+'/api/robot/execute',
+news.newsGuard
 );
 
-
 /* =========================================================
-   ROBOT MODULE
+ROBOT MODULE
 ========================================================= */
 
 const robot = require('./robot-module')({
-  express,
-  dataFile:
-    process.env.ROBOT_DATA_FILE ||
-    './robot-data.json'
+express,
+dataFile:
+process.env.ROBOT_DATA_FILE ||
+'./robot-data.json'
 });
 
 app.use(robot.router);
 
+/* =========================================================
+IA MENTOR
+========================================================= */
+
+const mentor = require('./mentor')(express);
+
+app.use(mentor.router);
+
+mentor.start();
 
 /* =========================================================
-   MEMORY
+MEMORY
 ========================================================= */
 
 let latestSignal = null;
 let lastAck = null;
 
-
 /* =========================================================
-   SECURITY
+SECURITY
 ========================================================= */
 
 function safeEqual(a, b) {
-  const aa = Buffer.from(String(a || ''));
-  const bb = Buffer.from(String(b || ''));
+const aa = Buffer.from(String(a || ''));
+const bb = Buffer.from(String(b || ''));
 
-  return (
-    aa.length === bb.length &&
-    crypto.timingSafeEqual(aa, bb)
-  );
+return (
+aa.length === bb.length &&
+crypto.timingSafeEqual(aa, bb)
+);
 }
 
-
 /* =========================================================
-   SIGNAL VALIDATION
+SIGNAL VALIDATION
 ========================================================= */
 
 function validateSignal(s) {
-  const required = [
-    'id',
-    'symbol',
-    'side',
-    'orderType',
-    'entry',
-    'sl',
-    'tp1'
-  ];
+const required = [
+'id',
+'symbol',
+'side',
+'orderType',
+'entry',
+'sl',
+'tp1'
+];
 
-  for (const key of required) {
-    if (
-      s[key] === undefined ||
-      s[key] === null ||
-      s[key] === ''
-    ) {
-      return `missing_${key}`;
-    }
-  }
-
-  if (
-    !['BUY', 'SELL'].includes(
-      String(s.side).toUpperCase()
-    )
-  ) {
-    return 'bad_side';
-  }
-
-  if (
-    !['LIMIT', 'MARKET'].includes(
-      String(s.orderType).toUpperCase()
-    )
-  ) {
-    return 'bad_orderType';
-  }
-
-  for (const key of [
-    'entry',
-    'sl',
-    'tp1'
-  ]) {
-    if (!Number.isFinite(Number(s[key]))) {
-      return `bad_${key}`;
-    }
-  }
-
-  return null;
+for (const key of required) {
+if (
+s[key] === undefined ||
+s[key] === null ||
+s[key] === ''
+) {
+return "missing_${key}";
+}
 }
 
+if (
+!['BUY', 'SELL'].includes(
+String(s.side).toUpperCase()
+)
+) {
+return 'bad_side';
+}
+
+if (
+!['LIMIT', 'MARKET'].includes(
+String(s.orderType).toUpperCase()
+)
+) {
+return 'bad_orderType';
+}
+
+for (const key of [
+'entry',
+'sl',
+'tp1'
+]) {
+if (!Number.isFinite(Number(s[key]))) {
+return "bad_${key}";
+}
+}
+
+return null;
+}
 
 /* =========================================================
-   TWELVEDATA
-=========================================================
-
-   Plan utilisateur :
-   8 crédits/minute.
-
-   Sécurité :
-   6 appels maximum par fenêtre.
-
-   IMPORTANT :
-   - LIVE utilise le cache et ne force pas une attente.
-   - BACKTEST / historique attend la prochaine fenêtre
-     lorsque le quota est atteint.
+TWELVEDATA
 ========================================================= */
 
 const TD_CACHE = new Map();
 const TD_INFLIGHT = new Map();
 
-/*
-  Une fenêtre TwelveData.
-*/
 const TD_WINDOW = {
-  started: Date.now(),
-  used: 0
+started: Date.now(),
+used: 0
 };
 
-/*
-  On garde 2 crédits de sécurité.
-*/
 const TD_SAFE_LIMIT = 6;
 
-/*
-  Cache TTL.
-*/
 const TD_TTL_MS = {
-  quote: 30 * 1000,
-  price: 30 * 1000,
-  time_series: 5 * 60 * 1000,
-  exchange_rate: 5 * 60 * 1000
+quote: 30 * 1000,
+price: 30 * 1000,
+time_series: 5 * 60 * 1000,
+exchange_rate: 5 * 60 * 1000
 };
 
 const TD_ALLOWED = new Set([
-  'time_series',
-  'quote',
-  'price',
-  'exchange_rate'
+'time_series',
+'quote',
+'price',
+'exchange_rate'
 ]);
 
-
 /* =========================================================
-   RESET WINDOW
+RESET WINDOW
 ========================================================= */
 
 function tdWindowReset() {
-  const now = Date.now();
+const now = Date.now();
 
-  if (
-    now - TD_WINDOW.started >= 60000
-  ) {
-    TD_WINDOW.started = now;
-    TD_WINDOW.used = 0;
-  }
+if (
+now - TD_WINDOW.started >= 60000
+) {
+TD_WINDOW.started = now;
+TD_WINDOW.used = 0;
+}
 }
 
-
 /* =========================================================
-   WAIT FOR NEXT WINDOW
+WAIT FOR NEXT WINDOW
 ========================================================= */
 
 function tdWaitMs() {
-  tdWindowReset();
+tdWindowReset();
 
-  const elapsed =
-    Date.now() - TD_WINDOW.started;
+const elapsed =
+Date.now() - TD_WINDOW.started;
 
-  const remaining =
-    60000 - elapsed;
+const remaining =
+60000 - elapsed;
 
-  /*
-    Petite marge pour laisser TwelveData
-    réinitialiser correctement son compteur.
-  */
-  return Math.max(
-    1000,
-    remaining + 1000
-  );
+return Math.max(
+1000,
+remaining + 1000
+);
 }
-
 
 function sleep(ms) {
-  return new Promise(resolve => {
-    setTimeout(resolve, ms);
-  });
+return new Promise(resolve => {
+setTimeout(resolve, ms);
+});
 }
 
-
 /* =========================================================
-   DETECT HISTORICAL / BACKTEST REQUEST
+DETECT HISTORICAL / BACKTEST REQUEST
 ========================================================= */
 
 function isHistoricalRequest(params) {
-  /*
-    Un appel time_series avec start_date/end_date
-    est considéré comme historique.
-
-    outputsize élevé est également traité comme historique.
-  */
-
-  if (
-    params.start_date ||
-    params.end_date
-  ) {
-    return true;
-  }
-
-  if (
-    params.outputsize &&
-    Number(params.outputsize) > 100
-  ) {
-    return true;
-  }
-
-  return false;
+if (
+params.start_date ||
+params.end_date
+) {
+return true;
 }
 
+if (
+params.outputsize &&
+Number(params.outputsize) > 100
+) {
+return true;
+}
+
+return false;
+}
 
 /* =========================================================
-   CACHE KEY
+CACHE KEY
 ========================================================= */
 
 function tdKey(endpoint, params) {
-  const sorted =
-    Object.entries(params)
-      .sort(([a], [b]) =>
-        a.localeCompare(b)
-      );
+const sorted =
+Object.entries(params)
+.sort(([a], [b]) =>
+a.localeCompare(b)
+);
 
-  return (
-    endpoint +
-    '?' +
-    sorted
-      .map(
-        ([key, value]) =>
-          `${key}=${String(value)}`
-      )
-      .join('&')
-  );
+return (
+endpoint +
+'?' +
+sorted
+.map(
+([key, value]) =>
+"${key}=${String(value)}"
+)
+.join('&')
+);
 }
 
-
 /* =========================================================
-   CACHE CLEANUP
+CACHE CLEANUP
 ========================================================= */
 
 function cleanupCache() {
-  const now = Date.now();
+const now = Date.now();
 
-  for (
-    const [key, item]
-    of TD_CACHE.entries()
-  ) {
+for (
+const [key, item]
+of TD_CACHE.entries()
+) {
 
-    const ttl =
-      TD_TTL_MS[item.endpoint] ||
-      60000;
+const ttl =
+  TD_TTL_MS[item.endpoint] ||
+  60000;
 
-    if (
-      now - item.at > ttl
-    ) {
-      TD_CACHE.delete(key);
-    }
-  }
-
-  /*
-    Protection mémoire :
-    on garde au maximum 300 entrées.
-  */
-
-  if (TD_CACHE.size > 300) {
-
-    const entries =
-      [...TD_CACHE.entries()]
-        .sort(
-          (a, b) =>
-            a[1].at - b[1].at
-        );
-
-    const removeCount =
-      TD_CACHE.size - 300;
-
-    for (
-      let i = 0;
-      i < removeCount;
-      i++
-    ) {
-      TD_CACHE.delete(
-        entries[i][0]
-      );
-    }
-  }
+if (
+  now - item.at > ttl
+) {
+  TD_CACHE.delete(key);
 }
 
+}
+
+if (TD_CACHE.size > 300) {
+
+const entries =
+  [...TD_CACHE.entries()]
+    .sort(
+      (a, b) =>
+        a[1].at - b[1].at
+    );
+
+const removeCount =
+  TD_CACHE.size - 300;
+
+for (
+  let i = 0;
+  i < removeCount;
+  i++
+) {
+  TD_CACHE.delete(
+    entries[i][0]
+  );
+}
+
+}
+}
 
 /* =========================================================
-   TWELVEDATA REQUEST
+TWELVEDATA REQUEST
 ========================================================= */
 
 async function fetchTwelveData(
-  endpoint,
-  params
+endpoint,
+params
 ) {
 
-  if (!TWELVEDATA_API_KEY) {
-    const error =
-      new Error(
-        'TWELVEDATA_API_KEY is missing'
-      );
+if (!TWELVEDATA_API_KEY) {
+const error =
+new Error(
+'TWELVEDATA_API_KEY is missing'
+);
 
-    error.code =
-      'TD_NO_API_KEY';
+error.code =
+  'TD_NO_API_KEY';
 
-    throw error;
-  }
+throw error;
 
+}
 
-  const key =
-    tdKey(
-      endpoint,
-      params
-    );
+const key =
+tdKey(
+endpoint,
+params
+);
 
+const ttl =
+TD_TTL_MS[endpoint] ||
+60000;
 
-  const ttl =
-    TD_TTL_MS[endpoint] ||
-    60000;
+const historical =
+isHistoricalRequest(
+params
+);
 
+const cached =
+TD_CACHE.get(key);
 
-  const historical =
-    isHistoricalRequest(
-      params
-    );
+if (
+cached &&
+Date.now() - cached.at < ttl
+) {
 
+return {
+  data:
+    cached.data,
 
-  /* -------------------------------------------------------
-     CACHE
-  ------------------------------------------------------- */
+  usage: {
+    used:
+      TD_WINDOW.used,
 
-  const cached =
-    TD_CACHE.get(key);
+    limit:
+      TD_SAFE_LIMIT,
 
+    cached: true,
 
-  if (
-    cached &&
-    Date.now() - cached.at < ttl
-  ) {
+    historical
+  },
 
-    return {
-      data:
-        cached.data,
+  stale: false
+};
 
-      usage: {
-        used:
-          TD_WINDOW.used,
+}
 
-        limit:
-          TD_SAFE_LIMIT,
+if (
+TD_INFLIGHT.has(key)
+) {
+return TD_INFLIGHT.get(key);
+}
 
-        cached: true,
+const promise =
+(async () => {
 
-        historical
-      },
+  while (true) {
 
-      stale: false
-    };
-  }
+    tdWindowReset();
 
+    if (
+      TD_WINDOW.used <
+      TD_SAFE_LIMIT
+    ) {
+      break;
+    }
 
-  /* -------------------------------------------------------
-     SAME REQUEST ALREADY RUNNING
-  ------------------------------------------------------- */
-
-  if (
-    TD_INFLIGHT.has(key)
-  ) {
-    return TD_INFLIGHT.get(key);
-  }
-
-
-  /* -------------------------------------------------------
-     CREATE REQUEST
-  ------------------------------------------------------- */
-
-  const promise =
-    (async () => {
-
-      /*
-        BACKTEST / HISTORIQUE :
-
-        Si le quota est atteint,
-        on attend automatiquement
-        la prochaine fenêtre.
-
-        LIVE :
-
-        Si quota atteint et ancien cache existe,
-        on utilise le cache.
-
-        S'il n'y a pas de cache,
-        on attend également plutôt que
-        de fabriquer des données.
-      */
-
-      while (true) {
-
-        tdWindowReset();
-
-
-        if (
-          TD_WINDOW.used <
-          TD_SAFE_LIMIT
-        ) {
-          break;
-        }
-
-
-        /*
-          Si on possède une ancienne donnée,
-          elle peut être utilisée temporairement
-          pour le LIVE.
-
-          Pour le backtest, on attend toujours
-          car les données historiques doivent être
-          exactes.
-        */
-
-        if (
-          cached &&
-          !historical
-        ) {
-
-          return {
-            data:
-              cached.data,
-
-            usage: {
-              used:
-                TD_WINDOW.used,
-
-              limit:
-                TD_SAFE_LIMIT,
-
-              cached: true,
-
-              historical: false
-            },
-
-            stale: true
-          };
-        }
-
-
-        const wait =
-          tdWaitMs();
-
-
-        console.log(
-          `[TwelveData] quota atteint. ` +
-          `Attente ${Math.ceil(wait / 1000)}s ` +
-          `(historique=${historical})`
-        );
-
-
-        await sleep(wait);
-      }
-
-
-      /*
-        On réserve un crédit.
-      */
-
-      TD_WINDOW.used++;
-
-
-      const query =
-        new URLSearchParams({
-          ...params,
-
-          apikey:
-            TWELVEDATA_API_KEY
-        });
-
-
-      const url =
-        `https://api.twelvedata.com/${endpoint}?${query.toString()}`;
-
-
-      let response;
-
-      try {
-
-        response =
-          await fetch(url);
-
-      } catch (networkError) {
-
-        /*
-          Si le réseau échoue, on ne fabrique
-          jamais de données.
-        */
-
-        const error =
-          new Error(
-            'TwelveData network connection failed'
-          );
-
-        error.code =
-          'TD_NETWORK_ERROR';
-
-        throw error;
-      }
-
-
-      let data;
-
-      try {
-
-        data =
-          await response.json();
-
-      } catch (jsonError) {
-
-        const error =
-          new Error(
-            'Invalid TwelveData response'
-          );
-
-        error.code =
-          'TD_BAD_RESPONSE';
-
-        throw error;
-      }
-
-
-      /* ---------------------------------------------------
-         UPSTREAM RATE LIMIT
-      --------------------------------------------------- */
-
-      const message =
-        String(
-          data?.message || ''
-        ).toLowerCase();
-
-
-      const rateLimited =
-        response.status === 429 ||
-        message.includes(
-          'api credits'
-        ) ||
-        message.includes(
-          'rate limit'
-        ) ||
-        message.includes(
-          'credits'
-        );
-
-
-      if (rateLimited) {
-
-        /*
-          Le compteur local peut être différent
-          du compteur TwelveData.
-
-          On force donc la prochaine fenêtre.
-        */
-
-        TD_WINDOW.started =
-          Date.now();
-
-        TD_WINDOW.used =
-          TD_SAFE_LIMIT;
-
-
-        /*
-          Backtest :
-          attendre puis réessayer.
-
-          LIVE :
-          cache stale si disponible,
-          sinon attendre aussi.
-        */
-
-        if (
-          cached &&
-          !historical
-        ) {
-
-          return {
-            data:
-              cached.data,
-
-            usage: {
-              used:
-                TD_WINDOW.used,
-
-              limit:
-                TD_SAFE_LIMIT,
-
-              cached: true,
-
-              historical: false
-            },
-
-            stale: true
-          };
-        }
-
-
-        const wait =
-          tdWaitMs();
-
-
-        console.log(
-          `[TwelveData] upstream rate limit. ` +
-          `Retry dans ${Math.ceil(wait / 1000)}s`
-        );
-
-
-        await sleep(wait);
-
-
-        /*
-          Recommencer la même requête
-          après reset.
-        */
-
-        return fetchTwelveData(
-          endpoint,
-          params
-        );
-      }
-
-
-      /* ---------------------------------------------------
-         OTHER API ERROR
-      --------------------------------------------------- */
-
-      if (
-        !response.ok ||
-        (
-          data &&
-          (
-            data.status === 'error' ||
-            data.code
-          )
-        )
-      ) {
-
-        const error =
-          new Error(
-            data?.message ||
-            'TwelveData request failed'
-          );
-
-        error.code =
-          'TD_UPSTREAM_ERROR';
-
-        error.status =
-          response.status || 400;
-
-        error.data =
-          data;
-
-        throw error;
-      }
-
-
-      /* ---------------------------------------------------
-         SAVE CACHE
-      --------------------------------------------------- */
-
-      TD_CACHE.set(
-        key,
-        {
-          at:
-            Date.now(),
-
-          endpoint,
-
-          data
-        }
-      );
-
-
-      cleanupCache();
-
+    if (
+      cached &&
+      !historical
+    ) {
 
       return {
-
-        data,
+        data:
+          cached.data,
 
         usage: {
-
           used:
             TD_WINDOW.used,
 
           limit:
             TD_SAFE_LIMIT,
 
-          cached: false,
+          cached: true,
 
-          historical
+          historical: false
         },
 
-        stale: false
+        stale: true
       };
+    }
 
-    })();
+    const wait =
+      tdWaitMs();
 
+    console.log(
+      `[TwelveData] quota atteint. ` +
+      `Attente ${Math.ceil(wait / 1000)}s ` +
+      `(historique=${historical})`
+    );
 
-  TD_INFLIGHT.set(
-    key,
-    promise
-  );
+    await sleep(wait);
+  }
 
+  TD_WINDOW.used++;
+
+  const query =
+    new URLSearchParams({
+      ...params,
+
+      apikey:
+        TWELVEDATA_API_KEY
+    });
+
+  const url =
+    `https://api.twelvedata.com/${endpoint}?${query.toString()}`;
+
+  let response;
 
   try {
 
-    return await promise;
+    response =
+      await fetch(url);
 
-  } finally {
+  } catch (networkError) {
 
-    TD_INFLIGHT.delete(
-      key
+    const error =
+      new Error(
+        'TwelveData network connection failed'
+      );
+
+    error.code =
+      'TD_NETWORK_ERROR';
+
+    throw error;
+  }
+
+  let data;
+
+  try {
+
+    data =
+      await response.json();
+
+  } catch (jsonError) {
+
+    const error =
+      new Error(
+        'Invalid TwelveData response'
+      );
+
+    error.code =
+      'TD_BAD_RESPONSE';
+
+    throw error;
+  }
+
+  const message =
+    String(
+      data?.message || ''
+    ).toLowerCase();
+
+  const rateLimited =
+    response.status === 429 ||
+    message.includes(
+      'api credits'
+    ) ||
+    message.includes(
+      'rate limit'
+    ) ||
+    message.includes(
+      'credits'
+    );
+
+  if (rateLimited) {
+
+    TD_WINDOW.started =
+      Date.now();
+
+    TD_WINDOW.used =
+      TD_SAFE_LIMIT;
+
+    if (
+      cached &&
+      !historical
+    ) {
+
+      return {
+        data:
+          cached.data,
+
+        usage: {
+          used:
+            TD_WINDOW.used,
+
+          limit:
+            TD_SAFE_LIMIT,
+
+          cached: true,
+
+          historical: false
+        },
+
+        stale: true
+      };
+    }
+
+    const wait =
+      tdWaitMs();
+
+    console.log(
+      `[TwelveData] upstream rate limit. ` +
+      `Retry dans ${Math.ceil(wait / 1000)}s`
+    );
+
+    await sleep(wait);
+
+    return fetchTwelveData(
+      endpoint,
+      params
     );
   }
+
+  if (
+    !response.ok ||
+    (
+      data &&
+      (
+        data.status === 'error' ||
+        data.code
+      )
+    )
+  ) {
+
+    const error =
+      new Error(
+        data?.message ||
+        'TwelveData request failed'
+      );
+
+    error.code =
+      'TD_UPSTREAM_ERROR';
+
+    error.status =
+      response.status || 400;
+
+    error.data =
+      data;
+
+    throw error;
+  }
+
+  TD_CACHE.set(
+    key,
+    {
+      at:
+        Date.now(),
+
+      endpoint,
+
+      data
+    }
+  );
+
+  cleanupCache();
+
+  return {
+
+    data,
+
+    usage: {
+
+      used:
+        TD_WINDOW.used,
+
+      limit:
+        TD_SAFE_LIMIT,
+
+      cached: false,
+
+      historical
+    },
+
+    stale: false
+
+  };
+
+})();
+
+TD_INFLIGHT.set(
+key,
+promise
+);
+
+try {
+
+return await promise;
+
+} finally {
+
+TD_INFLIGHT.delete(
+  key
+);
+
+}
 }
 
-
 /* =========================================================
-   HOME
+HOME
 ========================================================= */
 
 app.get(
-  '/',
-  (req, res) => {
+'/',
+(req, res) => {
 
-    res.sendFile(
-      path.join(
-        __dirname,
-        'index.html'
-      )
-    );
-
-  }
+res.sendFile(
+  path.join(
+    __dirname,
+    'index.html'
+  )
 );
 
+}
+);
 
 /* =========================================================
-   HEALTH
+HEALTH
 ========================================================= */
 
 app.get(
-  '/health',
-  (req, res) => {
+'/health',
+(req, res) => {
 
-    tdWindowReset();
+tdWindowReset();
 
-    res.json({
+res.json({
 
-      ok: true,
+  ok: true,
 
-      service:
-        'ares-trade-bridge',
+  service:
+    'ares-trade-bridge',
 
-      signal:
-        latestSignal
-          ? latestSignal.id
-          : null,
+  signal:
+    latestSignal
+      ? latestSignal.id
+      : null,
 
-      lastAck,
+  lastAck,
 
-      twelvedata: {
+  twelvedata: {
 
-        used:
-          TD_WINDOW.used,
+    used:
+      TD_WINDOW.used,
 
-        safeLimit:
-          TD_SAFE_LIMIT,
+    safeLimit:
+      TD_SAFE_LIMIT,
 
-        cacheEntries:
-          TD_CACHE.size,
+    cacheEntries:
+      TD_CACHE.size,
 
-        inflight:
-          TD_INFLIGHT.size,
+    inflight:
+      TD_INFLIGHT.size,
 
-        windowStarted:
-          new Date(
-            TD_WINDOW.started
-          ).toISOString()
+    windowStarted:
+      new Date(
+        TD_WINDOW.started
+      ).toISOString()
 
-      }
+  }
+
+});
+
+}
+);
+
+/* =========================================================
+TWELVEDATA PROXY
+========================================================= */
+
+app.get(
+'/api/td/:endpoint',
+async (req, res) => {
+
+try {
+
+  const endpoint =
+    String(
+      req.params.endpoint || ''
+    ).trim();
+
+  if (
+    !TD_ALLOWED.has(
+      endpoint
+    )
+  ) {
+
+    return res.status(400).json({
+
+      ok: false,
+
+      error:
+        'unsupported_endpoint'
 
     });
 
   }
-);
 
+  const params = {
 
-/* =========================================================
-   TWELVEDATA PROXY
-========================================================= */
+    symbol:
+      'XAU/USD'
 
-app.get(
-  '/api/td/:endpoint',
-  async (req, res) => {
+  };
 
-    try {
+  const allowedParams = [
 
-      const endpoint =
+    'interval',
+
+    'outputsize',
+
+    'timezone',
+
+    'start_date',
+
+    'end_date',
+
+    'format',
+
+    'dp',
+
+    'order'
+
+  ];
+
+  for (
+    const key
+    of allowedParams
+  ) {
+
+    if (
+      req.query[key] !== undefined &&
+      req.query[key] !== ''
+    ) {
+
+      params[key] =
         String(
-          req.params.endpoint || ''
-        ).trim();
-
-
-      if (
-        !TD_ALLOWED.has(
-          endpoint
-        )
-      ) {
-
-        return res.status(400).json({
-
-          ok: false,
-
-          error:
-            'unsupported_endpoint'
-
-        });
-
-      }
-
-
-      const params = {
-
-        /*
-          XAU/USD fixe côté serveur.
-        */
-
-        symbol:
-          'XAU/USD'
-
-      };
-
-
-      /*
-        Paramètres autorisés.
-      */
-
-      const allowedParams = [
-
-        'interval',
-
-        'outputsize',
-
-        'timezone',
-
-        'start_date',
-
-        'end_date',
-
-        'format',
-
-        'dp',
-
-        'order'
-
-      ];
-
-
-      for (
-        const key
-        of allowedParams
-      ) {
-
-        if (
-          req.query[key] !== undefined &&
-          req.query[key] !== ''
-        ) {
-
-          params[key] =
-            String(
-              req.query[key]
-            );
-
-        }
-
-      }
-
-
-      const result =
-        await fetchTwelveData(
-          endpoint,
-          params
+          req.query[key]
         );
 
-
-      return res.json({
-
-        ok: true,
-
-        data:
-          result.data,
-
-        usage:
-          result.usage,
-
-        stale:
-          result.stale
-
-      });
-
-    } catch (error) {
-
-      console.error(
-        'TwelveData proxy error:',
-        error
-      );
-
-
-      return res.status(
-        error.status || 500
-      ).json({
-
-        ok: false,
-
-        error:
-          error.code ||
-          'TWELVEDATA_ERROR',
-
-        message:
-          error.message ||
-          'TwelveData connection failed'
-
-      });
-
     }
 
   }
+
+  const result =
+    await fetchTwelveData(
+      endpoint,
+      params
+    );
+
+  return res.json({
+
+    ok: true,
+
+    data:
+      result.data,
+
+    usage:
+      result.usage,
+
+    stale:
+      result.stale
+
+  });
+
+} catch (error) {
+
+  console.error(
+    'TwelveData proxy error:',
+    error
+  );
+
+  return res.status(
+    error.status || 500
+  ).json({
+
+    ok: false,
+
+    error:
+      error.code ||
+      'TWELVEDATA_ERROR',
+
+    message:
+      error.message ||
+      'TwelveData connection failed'
+
+  });
+
+}
+
+}
 );
 
-
 /* =========================================================
-   WEBHOOK
+WEBHOOK
 ========================================================= */
 
 app.post(
-  '/api/v1/webhook',
-  (req, res) => {
+'/api/v1/webhook',
+(req, res) => {
 
-    const secret =
-      req.get(
-        'x-webhook-secret'
-      );
+const secret =
+  req.get(
+    'x-webhook-secret'
+  );
 
+if (
+  !safeEqual(
+    secret,
+    WEBHOOK_SECRET
+  )
+) {
 
-    if (
-      !safeEqual(
-        secret,
-        WEBHOOK_SECRET
-      )
-    ) {
+  return res.status(401).json({
 
-      return res.status(401).json({
+    ok: false,
 
-        ok: false,
+    error:
+      'unauthorized'
 
-        error:
-          'unauthorized'
+  });
 
-      });
+}
 
-    }
+const signal =
+  req.body || {};
 
+const validationError =
+  validateSignal(
+    signal
+  );
 
-    const signal =
-      req.body || {};
+if (validationError) {
 
+  return res.status(400).json({
 
-    const validationError =
-      validateSignal(
-        signal
-      );
+    ok: false,
 
+    error:
+      validationError
 
-    if (validationError) {
+  });
 
-      return res.status(400).json({
+}
 
-        ok: false,
+const normalized = {
 
-        error:
-          validationError
+  id:
+    String(
+      signal.id
+    ),
 
-      });
+  symbol:
+    String(
+      signal.symbol
+    ),
 
-    }
+  side:
+    String(
+      signal.side
+    ).toUpperCase(),
 
+  orderType:
+    String(
+      signal.orderType
+    ).toUpperCase(),
 
-    const normalized = {
+  entry:
+    Number(
+      signal.entry
+    ),
 
-      id:
-        String(
-          signal.id
+  sl:
+    Number(
+      signal.sl
+    ),
+
+  tp1:
+    Number(
+      signal.tp1
+    ),
+
+  tp2:
+    signal.tp2 == null
+      ? null
+      : Number(
+          signal.tp2
         ),
 
-      symbol:
-        String(
-          signal.symbol
+  tp3:
+    signal.tp3 == null
+      ? null
+      : Number(
+          signal.tp3
         ),
 
-      side:
-        String(
-          signal.side
-        ).toUpperCase(),
-
-      orderType:
-        String(
-          signal.orderType
-        ).toUpperCase(),
-
-      entry:
-        Number(
-          signal.entry
+  volume:
+    signal.volume == null
+      ? null
+      : Number(
+          signal.volume
         ),
 
-      sl:
-        Number(
-          signal.sl
+  riskPercent:
+    signal.riskPercent == null
+      ? null
+      : Number(
+          signal.riskPercent
         ),
 
-      tp1:
-        Number(
-          signal.tp1
+  score:
+    signal.score == null
+      ? null
+      : Number(
+          signal.score
         ),
 
-      tp2:
-        signal.tp2 == null
-          ? null
-          : Number(
-              signal.tp2
-            ),
+  tf:
+    signal.tf == null
+      ? null
+      : String(
+          signal.tf
+        ),
 
-      tp3:
-        signal.tp3 == null
-          ? null
-          : Number(
-              signal.tp3
-            ),
+  magic:
+    signal.magic == null
+      ? 260926
+      : Number(
+          signal.magic
+        ),
 
-      volume:
-        signal.volume == null
-          ? null
-          : Number(
-              signal.volume
-            ),
+  createdAt:
+    signal.createdAt ||
+    new Date().toISOString(),
 
-      riskPercent:
-        signal.riskPercent == null
-          ? null
-          : Number(
-              signal.riskPercent
-            ),
+  status:
+    'NEW'
 
-      score:
-        signal.score == null
-          ? null
-          : Number(
-              signal.score
-            ),
+};
 
-      tf:
-        signal.tf == null
-          ? null
-          : String(
-              signal.tf
-            ),
+if (
+  latestSignal &&
+  latestSignal.id ===
+    normalized.id
+) {
 
-      magic:
-        signal.magic == null
-          ? 260926
-          : Number(
-              signal.magic
-            ),
+  return res.json({
 
-      createdAt:
-        signal.createdAt ||
-        new Date().toISOString(),
+    ok: true,
 
-      status:
-        'NEW'
+    duplicate: true,
 
-    };
+    id:
+      normalized.id
 
+  });
 
-    /* ---------------------------------------------------
-       DUPLICATE PROTECTION
-    --------------------------------------------------- */
+}
 
-    if (
-      latestSignal &&
-      latestSignal.id ===
-        normalized.id
-    ) {
+const pause =
+  news.getPause();
 
-      return res.json({
+if (
+  pause.paused
+) {
 
-        ok: true,
+  normalized.status =
+    'BLOCKED_NEWS';
 
-        duplicate: true,
+}
 
-        id:
-          normalized.id
+latestSignal =
+  normalized;
 
-      });
+if (
+  pause.paused
+) {
 
-    }
+  console.log(
+    `TRADE_BLOCKED_NEWS: ` +
+    `signal ${normalized.id} ` +
+    `non exécuté ` +
+    `(${pause.event.name})`
+  );
 
+  return res.json({
 
-    /* ---------------------------------------------------
-       NEWS PROTECTION
-    --------------------------------------------------- */
+    ok: true,
 
-    const pause =
-      news.getPause();
+    accepted: true,
 
+    id:
+      normalized.id,
 
-    if (
-      pause.paused
-    ) {
+    robot:
+      'TRADE_BLOCKED_NEWS',
 
-      normalized.status =
-        'BLOCKED_NEWS';
+    news:
+      pause.event.name,
 
-    }
+    resumeAt:
+      new Date(
+        pause.resumeAt
+      ).toISOString()
 
+  });
 
-    latestSignal =
-      normalized;
+}
 
+try {
 
-    /* ---------------------------------------------------
-       BLOCK NEWS
-    --------------------------------------------------- */
+  robot.dispatchSignal({
 
-    if (
-      pause.paused
-    ) {
+    id:
+      normalized.id,
 
-      console.log(
-        `TRADE_BLOCKED_NEWS: ` +
-        `signal ${normalized.id} ` +
-        `non exécuté ` +
-        `(${pause.event.name})`
-      );
+    symbol:
+      'XAUUSD',
 
+    dir:
+      normalized.side,
 
-      return res.json({
+    entry:
+      normalized.entry,
 
-        ok: true,
+    sl:
+      normalized.sl,
 
-        accepted: true,
+    tp1:
+      normalized.tp1,
 
-        id:
-          normalized.id,
+    tp2:
+      normalized.tp2,
 
-        robot:
-          'TRADE_BLOCKED_NEWS',
+    tp3:
+      normalized.tp3
 
-        news:
-          pause.event.name,
+  });
 
-        resumeAt:
-          new Date(
-            pause.resumeAt
-          ).toISOString()
+} catch (error) {
 
-      });
+  console.error(
+    'Robot dispatch error:',
+    error
+  );
 
-    }
+}
 
+return res.json({
 
-    /* ---------------------------------------------------
-       ROBOT DISPATCH
-    --------------------------------------------------- */
+  ok: true,
 
-    try {
+  accepted: true,
 
-      robot.dispatchSignal({
+  id:
+    normalized.id
 
-        id:
-          normalized.id,
+});
 
-        symbol:
-          'XAUUSD',
-
-        dir:
-          normalized.side,
-
-        entry:
-          normalized.entry,
-
-        sl:
-          normalized.sl,
-
-        tp1:
-          normalized.tp1,
-
-        tp2:
-          normalized.tp2,
-
-        tp3:
-          normalized.tp3
-
-      });
-
-    } catch (error) {
-
-      console.error(
-        'Robot dispatch error:',
-        error
-      );
-
-    }
-
-
-    return res.json({
-
-      ok: true,
-
-      accepted: true,
-
-      id:
-        normalized.id
-
-    });
-
-  }
+}
 );
 
-
 /* =========================================================
-   EA SIGNAL
+EA SIGNAL
 ========================================================= */
 
 app.get(
-  '/api/v1/signal',
-  (req, res) => {
+'/api/v1/signal',
+(req, res) => {
 
-    const token =
-      req.get(
-        'x-ea-token'
-      );
+const token =
+  req.get(
+    'x-ea-token'
+  );
 
+if (
+  !safeEqual(
+    token,
+    EA_TOKEN
+  )
+) {
 
-    if (
-      !safeEqual(
-        token,
-        EA_TOKEN
-      )
-    ) {
+  return res.status(401).json({
 
-      return res.status(401).json({
+    ok: false,
 
-        ok: false,
+    error:
+      'unauthorized'
 
-        error:
-          'unauthorized'
+  });
 
-      });
+}
 
-    }
+const pause =
+  news.getPause();
 
+if (
+  pause.paused ||
+  (
+    latestSignal &&
+    latestSignal.status ===
+      'BLOCKED_NEWS'
+  )
+) {
 
-    const pause =
-      news.getPause();
+  return res.json({
 
+    ok: true,
 
-    /*
-      Pendant une news HIGH IMPACT,
-      aucun signal n'est envoyé à l'EA.
-    */
+    signal: null,
 
-    if (
-      pause.paused ||
-      (
-        latestSignal &&
-        latestSignal.status ===
-          'BLOCKED_NEWS'
-      )
-    ) {
+    blocked:
+      'TRADE_BLOCKED_NEWS'
 
-      return res.json({
+  });
 
-        ok: true,
+}
 
-        signal: null,
+return res.json({
 
-        blocked:
-          'TRADE_BLOCKED_NEWS'
+  ok: true,
 
-      });
+  signal:
+    latestSignal
 
-    }
+});
 
-
-    return res.json({
-
-      ok: true,
-
-      signal:
-        latestSignal
-
-    });
-
-  }
+}
 );
 
-
 /* =========================================================
-   EA ACK
+EA ACK
 ========================================================= */
 
 app.post(
-  '/api/v1/ack',
-  (req, res) => {
+'/api/v1/ack',
+(req, res) => {
 
-    const token =
-      req.get(
-        'x-ea-token'
-      );
+const token =
+  req.get(
+    'x-ea-token'
+  );
 
+if (
+  !safeEqual(
+    token,
+    EA_TOKEN
+  )
+) {
 
-    if (
-      !safeEqual(
-        token,
-        EA_TOKEN
-      )
-    ) {
+  return res.status(401).json({
 
-      return res.status(401).json({
+    ok: false,
 
-        ok: false,
+    error:
+      'unauthorized'
 
-        error:
-          'unauthorized'
+  });
 
-      });
+}
 
-    }
+const {
+  id,
+  status,
+  message
+} =
+  req.body || {};
 
+lastAck = {
 
-    const {
-      id,
-      status,
-      message
-    } =
-      req.body || {};
+  id:
+    String(
+      id || ''
+    ),
 
+  status:
+    String(
+      status || ''
+    ),
 
-    lastAck = {
+  message:
+    String(
+      message || ''
+    ),
 
-      id:
-        String(
-          id || ''
-        ),
+  at:
+    new Date().toISOString()
 
-      status:
-        String(
-          status || ''
-        ),
+};
 
-      message:
-        String(
-          message || ''
-        ),
+if (
+  latestSignal &&
+  latestSignal.id ===
+    lastAck.id
+) {
 
-      at:
-        new Date().toISOString()
+  latestSignal.status =
+    lastAck.status;
 
-    };
+}
 
+return res.json({
 
-    if (
-      latestSignal &&
-      latestSignal.id ===
-        lastAck.id
-    ) {
+  ok: true
 
-      latestSignal.status =
-        lastAck.status;
+});
 
-    }
-
-
-    return res.json({
-
-      ok: true
-
-    });
-
-  }
+}
 );
 
-
 /* =========================================================
-   START SERVER
+START SERVER
 ========================================================= */
 
 app.listen(
-  PORT,
-  () => {
+PORT,
+() => {
 
-    console.log(
-      `Ares trade bridge listening on :${PORT}`
-    );
+console.log(
+  `Ares trade bridge listening on :${PORT}`
+);
 
-  }
+}
 );
