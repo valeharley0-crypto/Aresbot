@@ -65,6 +65,21 @@ try {
   mentor = createMentor(express);
   app.use(mentor.router);
   mentor.start();
+
+  // Calendrier news -> IA Mentor (USD, impact élevé). Les valeurs absentes restent null (rien n'est inventé).
+  const feedNews = () => {
+    try {
+      const now = Date.now();
+      const evs = news.getEvents()
+        .filter(e => e.usd && e.impact === 'high' && e.ts > now - 3 * 3600e3 && e.ts < now + 36 * 3600e3)
+        .map(e => ({ title: e.name, time: new Date(e.ts).toISOString(), currency: 'USD', impact: 'high',
+                     category: e.category, forecast: e.forecast, previous: e.previous, actual: e.actual }));
+      if (evs.length) mentor.engine.setNews(evs);
+    } catch (err) { console.error('[mentor] news feed:', err && err.message); }
+  };
+  feedNews();
+  const feedTimer = setInterval(feedNews, 30000);
+  if (feedTimer.unref) feedTimer.unref();
 } catch (error) {
   console.error('[mentor] IA Mentor non chargé:', error && error.message);
 }
