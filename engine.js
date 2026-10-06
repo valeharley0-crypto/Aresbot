@@ -47,6 +47,9 @@ const DEFAULTS = {
   // 2 positions au même prix d'entrée : moitié des lots sur TP1, moitié sur TP2 (si le signal contient tp2)
   split: { enabled: true },
   normal: { objectivePoints: 20, dailyLossPoints: 10, maxTrades: 0, stopAtObjective: false, postObjectiveRiskPoints: 0, minRR: 1 },
+  // MICRO-COMPTE (ex. 5 $) : le lot minimum dépasse toujours le % normal. Si solde <= balanceBelow, on autorise
+  // UNIQUEMENT le lot minimum, tant que son risque reste <= maxRiskPct % du solde. La perte jour (dailyLossPoints) reste active.
+  micro: { enabled: true, balanceBelow: 50, maxRiskPct: 25 },
   prop: {
     accountSize: null, profitTarget: null, dailyLossLimit: null, maxOverallLoss: null,
     maxTrades: null, maxRiskPerTradeMoney: null, minTradingDays: null, consistencyMaxDayPct: null
@@ -405,10 +408,21 @@ function createEngine(opts = {}) {
     if (new Set(activeTrades().map(t => t.setupId || t.id)).size >= c.maxActiveTrades) return bad('RISK', `trade IA déjà actif (max ${c.maxActiveTrades})`);
     const pct = p.source === 'NEWS' ? c.news.riskPerTradePct : c.riskPerTradePct;
     let cap = b.balance * pct / 100;
+    let microMode = false;
+    const mc = c.micro || {};
+    if (mc.enabled && b.balance <= mc.balanceBelow) {
+      const microCap = b.balance * mc.maxRiskPct / 100;
+      if (microCap > cap) { cap = microCap; microMode = true; }
+    }
     const asked = num(p.risk); if (asked && asked > 0) cap = Math.min(cap, asked);
     if (c.mode === 'PROP' && c.prop.maxRiskPerTradeMoney) cap = Math.min(cap, c.prop.maxRiskPerTradeMoney);
     const sz = size(slPts, cap, sym);
     if (!sz.lots) return bad('RISK', `lot minimal dépasse le risque autorisé (${r2(cap)}$ pour SL ${slPts}pts)`);
+    if (microMode) {
+      const bsm = brokerSpec(sym), minLotM = Math.max(c.minLot, bsm.minLot || 0);
+      if (sz.lots > minLotM) { sz.lots = +minLotM.toFixed(2); sz.riskMoney = r2(sz.lots * sz.perLot); }
+      ok('RISK', `MICRO-COMPTE (solde ${r2(b.balance)}$ <= ${mc.balanceBelow}$) : lot minimum ${sz.lots}, risque ${sz.riskMoney}$ (max ${mc.maxRiskPct}% du solde)`);
+    }
     let legs = null;
     if (tp2 !== null && c.split && c.split.enabled) {   // 2 positions : moitié des lots sur TP1, moitié sur TP2
       const bs = brokerSpec(sym), st = bs.lotStep > 0 ? bs.lotStep : c.lotStep, minLot = Math.max(c.minLot, bs.minLot || 0);
