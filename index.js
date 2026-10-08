@@ -12,7 +12,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { createManager } = require('./ctrader/manager');
-const { OrderFlowHub } = require('./providers');
+const { OrderFlowHub } = require('./providers/providers');
 const { USER_RE } = require('./ctrader/token-store');
 
 module.exports = function createMentor(express, opts = {}) {
