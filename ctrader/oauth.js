@@ -56,7 +56,6 @@ class CTraderOAuth {
     const params = new URLSearchParams({
       client_id: this.clientId,
       redirect_uri: this.redirectUri,
-      response_type: 'code',
       scope: 'trading',
       product: 'web',
       state: String(state)
@@ -105,19 +104,17 @@ class CTraderOAuth {
 
     let response;
 
-    // Documentation Spotware : GET /apps/token?grant_type=...&client_id=...&client_secret=...
-    // Repli sur POST (formulaire) si le GET n'est pas accepté.
-    const attempt = async method => {
-      const url = method === 'GET' ? `${TOKEN_URL}?${body.toString()}` : TOKEN_URL;
-      const init = method === 'GET'
-        ? { method: 'GET', headers: { 'Accept': 'application/json' } }
-        : { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' }, body: body.toString() };
-      return fetch(url, init);
+    // Doc Spotware : échange du code = GET ; refresh = POST (paramètres dans l'URL). Repli sur l'autre méthode si 404/405.
+    const isRefresh = params.grant_type === 'refresh_token';
+    const attempt = method => {
+      const url = `${TOKEN_URL}?${body.toString()}`;
+      return fetch(url, { method, headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' } });
     };
 
     try {
-      response = await attempt('GET');
-      if (response.status === 404 || response.status === 405) response = await attempt('POST');
+      const order = isRefresh ? ['POST', 'GET'] : ['GET', 'POST'];
+      response = await attempt(order[0]);
+      if (response.status === 404 || response.status === 405) response = await attempt(order[1]);
     } catch (error) {
       throw new Error(
         'cTrader OAuth inaccessible : ' +
@@ -158,7 +155,8 @@ class CTraderOAuth {
       !data ||
       !data.accessToken
     ) {
-      const why = data && [data.errorCode || data.error, data.description || data.error_description].filter(Boolean).join(' : ') + ' | id=' + String(this.clientId).slice(0, 6) + '…' + String(this.clientId).slice(-4) + '(' + String(this.clientId).length + ') #' + require('crypto').createHash('sha256').update(String(this.clientId)).digest('hex').slice(0, 6) + '/' + require('crypto').createHash('sha256').update(String(this.clientSecret)).digest('hex').slice(0, 6) + ' secret=' + String(this.clientSecret).slice(0, 2) + '…' + String(this.clientSecret).slice(-2) + '(' + String(this.clientSecret).length + ')';
+      const why = data && [data.errorCode || data.error, data.description || data.error_description].filter(Boolean).join(' : ') +
+        ' | client_id(' + String(this.clientId).length + ' car.) secret(' + String(this.clientSecret).length + ' car.)';
       const keys = data && typeof data === 'object' ? Object.keys(data).join(',') : typeof data;
       throw new Error(
         'cTrader OAuth : accessToken absent' +
