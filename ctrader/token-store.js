@@ -229,6 +229,12 @@ function available(userId) {
   );
 }
 
+/** La clé de chiffrement est-elle configurée sur le serveur ? (indépendant de la présence de jetons) */
+function keyConfigured() {
+  const raw = process.env.TOKEN_ENCRYPTION_KEY;
+  return !!raw && String(raw).length >= 16;
+}
+
 function count() {
   return STORE.size;
 }
@@ -247,6 +253,7 @@ module.exports = {
 
   has,
   available,
+  keyConfigured,
 
   count
 };
