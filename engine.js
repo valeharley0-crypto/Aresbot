@@ -62,7 +62,7 @@ const DEFAULTS = {
   news: {
     enabled: true, autoTrade: false, requireData: true, maxStaleMin: 180,   // requireData : calendrier indisponible/périmé -> WAIT/BLOCK
     relevantCurrencies: ['USD'], impacts: ['high'],
-    pauseBeforeMin: 60, analysisBeforeMin: 30, executeBeforeSec: 30, resumeAfterMin: 10,
+    announceBeforeMin: 120, pauseBeforeMin: 60, analysisBeforeMin: 60, executeBeforeSec: 60, resumeAfterMin: 10,   // T-2h : annonce · T-1h : analyse IA + pause · T-1min : entrée robot
     slPoints: 10, tpPoints: 10, tp2Points: 20,
     perSymbol: { default: { slPoints: 100, tpPoints: 100, tp2Points: 200 }, XAUUSD: { slPoints: 10, tpPoints: 10, tp2Points: 20 } },
     minConfidence: 55, minDeviationPct: 2, riskPerTradePct: 0.5,
@@ -122,6 +122,12 @@ function createEngine(opts = {}) {
     }
   } catch (e) { /* premier démarrage */ }
   S.cfgVer = 5;
+  if (S.newsTimingVer !== 1) {   // migration : annonce 2h · analyse 1h · entrée 1 min · XAUUSD + EURUSD seulement
+    const n = S.config.news;
+    n.announceBeforeMin = 120; n.pauseBeforeMin = 60; n.analysisBeforeMin = 60; n.executeBeforeSec = 60;
+    n.symbols = ['XAUUSD', 'EURUSD'];
+    S.newsTimingVer = 1;
+  }
   delete S.candles;
   if (!S.autoState) S.autoState = {};
   if (!S.autoState.scan) S.autoState.scan = {};
@@ -292,7 +298,7 @@ function createEngine(opts = {}) {
       risk_level: ev.impact === 'high' ? 'HIGH' : 'MEDIUM', analyzed_at: new Date(clock()).toISOString()
     };
     const sign = CATEGORY_USD_SIGN[ev.category];
-    if (sign === undefined) return Object.assign(base, { bias: 'DATA_UNAVAILABLE', confidence: 0, data: 'UNAVAILABLE', reason: 'Catégorie inconnue ou absente (inflation, employment, growth, rates, unemployment) : pas d\'interprétation fiable' });
+    if (sign === undefined) return Object.assign(base, { pairBias: null, bias: 'DATA_UNAVAILABLE', confidence: 0, data: 'UNAVAILABLE', reason: 'Catégorie inconnue ou absente (inflation, employment, growth, rates, unemployment) : pas d\'interprétation fiable' });
     let a, b, basis;
     if (ev.actual !== null && ev.forecast !== null) { a = ev.actual; b = ev.forecast; basis = 'ACTUAL_VS_FORECAST'; }
     else if (ev.forecast !== null && ev.previous !== null) { a = ev.forecast; b = ev.previous; basis = 'FORECAST_VS_PREVIOUS'; }
@@ -309,7 +315,16 @@ function createEngine(opts = {}) {
       reason = `${basis === 'ACTUAL_VS_FORECAST' ? 'Réel' : 'Prévision'} ${a} vs ${basis === 'ACTUAL_VS_FORECAST' ? 'prévision' : 'précédent'} ${b} (${r2(dev)}%) → USD ${usdStronger ? 'plus fort' : 'plus faible'} → Gold ${usdStronger ? 'baissier' : 'haussier'}.`;
       if (basis === 'FORECAST_VS_PREVIOUS') reason += ' Heuristique avant publication : prévision vs précédent ne prédit pas la surprise.';
     }
-    return Object.assign(base, { bias, confidence, data: 'REAL', basis, reason });
+    return Object.assign(base, { bias, confidence, data: 'REAL', basis, reason, pairBias: pairBiasFor(bias, confidence) });
+  }
+  /** Biais par paire, déduit du biais USD/Gold (aucune donnée inventée : NEUTRAL si pas de biais). */
+  function pairBiasFor(bias, confidence) {
+    const usdQuote = ['XAUUSD', 'EURUSD', 'GBPUSD'], usdBase = ['USDJPY', 'USDCHF', 'USDCAD'];
+    const out = {};
+    const flip = b => (b === 'BUY' ? 'SELL' : b === 'SELL' ? 'BUY' : b);
+    for (const p of usdQuote) out[p] = { bias, confidence: bias === 'NEUTRAL' ? 0 : confidence };
+    for (const p of usdBase) out[p] = { bias: flip(bias), confidence: bias === 'NEUTRAL' ? 0 : confidence };
+    return out;
   }
 
   function newsContext(ts) {
@@ -323,11 +338,12 @@ function createEngine(opts = {}) {
       const e = inPause;
       if (ts > e.t) sub = 'POST_NEWS';
       else if (e.executed && e.executed.status === 'EXECUTED') sub = 'EXECUTE';
-      else if (ts >= e.t - n.executeBeforeSec * 1000) sub = 'T-30S';
+      else if (ts >= e.t - n.executeBeforeSec * 1000) sub = 'T-1MIN';
       else if (!e.analysis) sub = ts < e.t - n.analysisBeforeMin * 60000 ? 'NEWS_WAIT' : 'FUNDAMENTAL_ANALYSIS';
       else sub = ['BUY', 'SELL'].includes(e.analysis.bias) && e.analysis.confidence >= n.minConfidence ? 'BIAS_CONFIRMED' : 'NO_TRADE';
     }
-    return { paused: !!inPause, event: ev, sub, countdownSec: ev ? Math.round((ev.t - ts) / 1000) : null };
+    const announced = !!ev && ev.t > ts - n.resumeAfterMin * 60000 && ev.t - ts <= (n.announceBeforeMin || 120) * 60000;
+    return { paused: !!inPause, announced, event: ev, sub, countdownSec: ev ? Math.round((ev.t - ts) / 1000) : null };
   }
 
   // ---------- PROFIT PROTECTION (Protected Profit Floor + Trailing) ----------
@@ -776,9 +792,9 @@ function createEngine(opts = {}) {
         if (ev.analysis && ev.actual !== null && ev.analysis.basis !== 'ACTUAL_VS_FORECAST' && ts >= ev.t) {
           ev.postAnalysis = analyze(ev);   // information seulement, jamais de nouveau trade
         }
-        if (!ev.executed && ev.analysis && ts >= ev.t - 45000 && ts < ev.t - c.news.executeBeforeSec * 1000) await ensurePrice();   // pré-chauffe du prix
+        if (!ev.executed && ev.analysis && ts >= ev.t - (c.news.executeBeforeSec + 15) * 1000 && ts < ev.t - c.news.executeBeforeSec * 1000) await ensurePrice();   // pré-chauffe du prix
         if (!ev.executed && ts >= ev.t - c.news.executeBeforeSec * 1000) {
-          if (ts >= ev.t - 5000) { ev.executed = { status: 'MISSED', reason: 'fenêtre T-30s dépassée' }; log('NO TRADE', `${ev.title}: fenêtre T-30s manquée`, { kind: 'news' }, true); save(); continue; }
+          if (ts >= ev.t - 5000) { ev.executed = { status: 'MISSED', reason: 'fenêtre T-1min dépassée' }; log('NO TRADE', `${ev.title}: fenêtre T-1min manquée`, { kind: 'news' }, true); save(); continue; }
           const a = ev.analysis;
           if (!a) ev.executed = { status: 'NO_TRADE', reason: 'pas d\'analyse fondamentale' };
           else if (!['BUY', 'SELL'].includes(a.bias)) ev.executed = { status: 'NO_TRADE', reason: 'biais ' + a.bias };
@@ -844,7 +860,9 @@ function createEngine(opts = {}) {
     const nc = newsContext(ts), e = nc.event;
     return {
       enabled: cfg().news.enabled, autoTrade: cfg().news.autoTrade, status: nc.paused ? nc.sub : (e ? 'NEWS_WAIT' : 'NO_EVENT'),
-      paused: nc.paused, countdownSec: nc.countdownSec, dataStale: newsStale(),
+      paused: nc.paused, announced: nc.announced, countdownSec: nc.countdownSec, dataStale: newsStale(),
+      timing: { announceBeforeMin: cfg().news.announceBeforeMin, analysisBeforeMin: cfg().news.analysisBeforeMin, executeBeforeSec: cfg().news.executeBeforeSec },
+      tradeSymbols: cfg().news.symbols,
       event: e ? { id: e.id, title: e.title, time: e.time, impact: e.impact, forecast: e.forecast, previous: e.previous, actual: e.actual } : null,
       bias: e && e.analysis ? e.analysis : (e ? { bias: 'PENDING', data: 'UNAVAILABLE' } : { bias: 'DATA_UNAVAILABLE', data: 'UNAVAILABLE', reason: 'Aucun événement news saisi' }),
       execution: e ? e.executed : null, tpPoints: cfg().news.tpPoints, slPoints: cfg().news.slPoints
