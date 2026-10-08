@@ -172,8 +172,13 @@ module.exports = function createMentor(express, opts = {}) {
 
   // ---------- cTrader : autorisation OAuth + compte ----------
   router.get('/api/ctrader/status', readLimit, auth, safe(req => Object.assign({ ok: true, configured: manager.oauth.configured(), tokenStorage: manager.tokens.keyConfigured ? manager.tokens.keyConfigured() : manager.tokens.available() }, manager.sessionStatus(req.user.userId))));
-  router.get('/api/ctrader/connect-url', authLimit, auth, safe(req => {
+  router.get('/api/ctrader/connect-url', authLimit, auth, safe(async req => {
     if (!(manager.tokens.keyConfigured ? manager.tokens.keyConfigured() : manager.tokens.available())) throw new Error('TOKEN_ENCRYPTION_KEY non configurée sur le serveur (≥ 16 caractères)');
+    if (process.env.CTRADER_ACCESS_TOKEN) {   // jeton Playground fourni : pas d'OAuth
+      await manager.seedFromEnv(req.user.userId);
+      const b = process.env.CTRADER_POST_CONNECT_URL || '/';
+      return { ok: true, url: b + (b.includes('?') ? '&' : '?') + 'ctrader=ok' };
+    }
     return { ok: true, url: manager.oauth.buildAuthUrl(req.user.userId, 'trading') };
   }));
   router.get('/api/ctrader/callback', authLimit, async (req, res) => {   // redirection navigateur depuis id.ctrader.com : protégée par le « state » à usage unique
@@ -188,7 +193,7 @@ module.exports = function createMentor(express, opts = {}) {
     const id = String(req.body && req.body.accountId || ''); if (!/^\d{1,18}$/.test(id)) throw new Error('accountId invalide');
     return Object.assign({ ok: true }, await manager.session(req.user.userId).selectAccount(id));
   }));
-  router.post('/api/ctrader/reconnect', writeLimit, auth, json, safe(async req => { await manager.session(req.user.userId).stop(); await manager.session(req.user.userId).start(); return Object.assign({ ok: true }, manager.sessionStatus(req.user.userId)); }));
+  router.post('/api/ctrader/reconnect', writeLimit, auth, json, safe(async req => { if (process.env.CTRADER_ACCESS_TOKEN) { await manager.seedFromEnv(req.user.userId); return { ok: true }; } await manager.session(req.user.userId).stop(); await manager.session(req.user.userId).start(); return Object.assign({ ok: true }, manager.sessionStatus(req.user.userId)); }));
   router.post('/api/ctrader/close-all', writeLimit, auth, json, safe(req => manager.closeAll(req.user.userId, 'demande utilisateur')));
   router.post('/api/ctrader/disconnect', writeLimit, auth, json, safe(req => manager.disconnect(req.user.userId)));
 
