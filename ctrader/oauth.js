@@ -12,7 +12,7 @@
 
 const crypto = require('crypto');
 
-const AUTH_URL = 'https://id.ctrader.com/my/settings/openapi';
+const AUTH_URL = 'https://id.ctrader.com/my/settings/openapi/grantingaccess/';
 const TOKEN_URL = 'https://openapi.ctrader.com/apps/token';
 
 class CTraderOAuth {
@@ -56,6 +56,7 @@ class CTraderOAuth {
       redirect_uri: this.redirectUri,
       response_type: 'code',
       scope: 'trading',
+      product: 'web',
       state: String(state)
     });
 
