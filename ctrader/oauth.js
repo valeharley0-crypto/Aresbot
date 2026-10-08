@@ -1,3 +1,4 @@
+
 'use strict';
 
 /**
@@ -157,7 +158,7 @@ class CTraderOAuth {
       !data ||
       !data.accessToken
     ) {
-      const why = data && [data.errorCode || data.error, data.description || data.error_description].filter(Boolean).join(' : ') + ' | id=' + String(this.clientId).slice(0, 6) + '…' + String(this.clientId).slice(-4) + '(' + String(this.clientId).length + ') secret=' + String(this.clientSecret).slice(0, 2) + '…' + String(this.clientSecret).slice(-2) + '(' + String(this.clientSecret).length + ')';
+      const why = data && [data.errorCode || data.error, data.description || data.error_description].filter(Boolean).join(' : ') + ' | id=' + String(this.clientId).slice(0, 6) + '…' + String(this.clientId).slice(-4) + '(' + String(this.clientId).length + ') #' + require('crypto').createHash('sha256').update(String(this.clientId)).digest('hex').slice(0, 6) + '/' + require('crypto').createHash('sha256').update(String(this.clientSecret)).digest('hex').slice(0, 6) + ' secret=' + String(this.clientSecret).slice(0, 2) + '…' + String(this.clientSecret).slice(-2) + '(' + String(this.clientSecret).length + ')';
       const keys = data && typeof data === 'object' ? Object.keys(data).join(',') : typeof data;
       throw new Error(
         'cTrader OAuth : accessToken absent' +
