@@ -298,5 +298,6 @@ module.exports = {
   update,
   get,
   getNews,
+  getEvents: getNews,
   status
 };
