@@ -283,6 +283,19 @@ try {
 } catch (_) { return null; }
 }
 
+/* Contournement OAuth : jeton copié depuis le Playground Spotware (variables Render) */
+async seedFromEnv(userId = 'owner') {
+  const clean = v => String(v || '').replace(/\s+/g, '').replace(/^["']+|["']+$/g, '');
+  const accessToken = clean(process.env.CTRADER_ACCESS_TOKEN);
+  if (!accessToken) return false;
+  const refreshToken = clean(process.env.CTRADER_REFRESH_TOKEN) || null;
+  this.tokens.set(userId, { accessToken, refreshToken, expiresAt: null });
+  const session = this._getSession(userId);
+  try { await session.stop(); } catch (_) {}
+  await session.start();
+  return true;
+}
+
 buildAuthUrl(userId = 'owner') {
 
 const state =
