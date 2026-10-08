@@ -2,7 +2,8 @@
 /**
  * ARES — IA MENTOR : routes API (Auth · cTrader · IA Engine · Order Flow · News · Risk · Journal · Admin) + boucle 1 s.
  * Utilisation dans server.js :
- *   const mentor = require('./index.js')(express);  app.use(mentor.router);  mentor.start();
+ *   const mentor = require('./index.js')(express, { news: newsProvider });  app.use(mentor.router);  mentor.start();
+ *   opts.news (facultatif) : NewsProvider (providers/providers.js). Sans lui, NEWS = UNAVAILABLE et l'IA Mentor continue de fonctionner.
  *
  * Variables d'environnement : voir .env.example (aucun secret n'est jamais envoyé au frontend ni écrit dans les logs).
  * Authentification (Dingana 1) : clé d'API MENTOR_API_KEY -> utilisateur OWNER_USER_ID ; ADMIN_API_KEY -> administrateur.
@@ -19,6 +20,7 @@ module.exports = function createMentor(express, opts = {}) {
   const dataRoot = opts.dataRoot || process.env.DATA_DIR || path.join(process.cwd(), 'data');
   const orderFlow = opts.orderFlow || new OrderFlowHub({ maxAgeSec: Number(process.env.ORDERFLOW_MAX_AGE_SEC) || 30 });
   const manager = opts.manager || createManager({ dataRoot, orderFlow, WebSocketImpl: opts.WebSocketImpl });
+  const news = opts.news || null;   // NewsProvider : calendrier économique réel (ou null)
   const router = express.Router();
   const json = express.json({ limit: '128kb' });
   const OWNER = USER_RE.test(process.env.OWNER_USER_ID || '') ? process.env.OWNER_USER_ID : 'owner';
@@ -132,6 +134,14 @@ module.exports = function createMentor(express, opts = {}) {
   router.get('/api/mentor/trades', readLimit, auth, safe(req => ({ ok: true, trades: E(req).trades(Math.min(+req.query.n || 100, 500)) })));
   router.get('/api/mentor/journal', readLimit, auth, safe(req => ({ ok: true, journal: E(req).journal(Math.min(+req.query.n || 100, 500)) })));
   router.get('/api/mentor/news', readLimit, auth, safe(req => Object.assign({ ok: true }, E(req).news(), { events: E(req).newsEvents() })));
+  // Calendrier économique réel (NEWS) : aucun événement n'est inventé ; sans flux : state UNAVAILABLE + liste vide.
+  router.get('/api/mentor/news/calendar', readLimit, auth, safe(req => {
+    if (!news) return { ok: true, state: 'UNAVAILABLE', available: false, fetchedAt: null, error: 'aucun flux news configuré', count: 0, events: [] };
+    const st = news.status();
+    const days = clamp(Number(req.query.days) || 7, 1, 14);
+    const events = news.calendar({ now: Date.now(), currency: String(req.query.currency || 'USD').slice(0, 3), impacts: String(req.query.impact || 'high,medium').slice(0, 40), days, pastHours: clamp(Number(req.query.past) || 12, 0, 72) });
+    return { ok: true, state: st.state, available: st.available, source: news.name(), fetchedAt: st.fetchedAt ? new Date(st.fetchedAt).toISOString() : null, error: st.available ? null : st.error, count: events.length, events };
+  }));
   router.get('/api/prop/status', readLimit, auth, safe(req => Object.assign({ ok: true }, E(req).propStatus())));
   router.get('/api/mentor/log', readLimit, auth, safe(req => ({ ok: true, logs: E(req).logs(Math.min(+req.query.n || 100, 500)) })));
   router.get('/api/mentor/config', readLimit, auth, safe(req => ({ ok: true, config: E(req).getConfig(), limits: admin.limits })));
@@ -179,6 +189,7 @@ module.exports = function createMentor(express, opts = {}) {
     return Object.assign({ ok: true }, await manager.session(req.user.userId).selectAccount(id));
   }));
   router.post('/api/ctrader/reconnect', writeLimit, auth, json, safe(async req => { await manager.session(req.user.userId).stop(); await manager.session(req.user.userId).start(); return Object.assign({ ok: true }, manager.sessionStatus(req.user.userId)); }));
+  router.post('/api/ctrader/close-all', writeLimit, auth, json, safe(req => manager.closeAll(req.user.userId, 'demande utilisateur')));
   router.post('/api/ctrader/disconnect', writeLimit, auth, json, safe(req => manager.disconnect(req.user.userId)));
 
   // ---------- Order Flow (source externe réelle) ----------
@@ -233,11 +244,29 @@ module.exports = function createMentor(express, opts = {}) {
     saveAdmin(); return { ok: true, limits: admin.limits };
   }));
 
+  // ---------- pompe NEWS : feed réel -> moteurs (aucune donnée inventée) ----------
+  let newsTimer = null;
+  function pumpNews() {
+    if (!news) return;
+    try {
+      const st = news.status();
+      if (!st.available) return;   // UNAVAILABLE : rien n'est envoyé ; le moteur reste en DATA_UNAVAILABLE (règle news.requireData)
+      const events = news.upcoming(Date.now());
+      if (events.length) manager.broadcastNews(events);
+      manager.heartbeatNews(st.fetchedAt);   // heure du dernier SUCCÈS du flux : le moteur mesure lui-même la péremption
+    } catch (e) { console.error('[news] pompe:', e && e.message); }
+  }
+
   // ---------- boucle 1 s ----------
   let timer = null, busy = false;
   function start() {
     if (timer) return;
     manager.get(OWNER);   // l'utilisateur propriétaire existe toujours
+    if (news) {
+      try { news.start(); } catch (e) { console.warn('[news] démarrage:', e && e.message); }
+      const first = setTimeout(pumpNews, 4000); if (first.unref) first.unref();
+      newsTimer = setInterval(pumpNews, 15000); if (newsTimer.unref) newsTimer.unref();
+    }
     if (orderFlow.start) orderFlow.start();   // interroge les sources HTTP configurées (BOOKMAP_API_URL / EXOCHARTS_API_URL)
     manager.startAll().catch(e => console.error('[ctrader] startAll:', manager.oauth.redact(e && e.message)));
     timer = setInterval(async () => {
@@ -248,7 +277,12 @@ module.exports = function createMentor(express, opts = {}) {
     if (timer.unref) timer.unref();
     console.log('[mentor] IA Mentor démarré (multi-utilisateur, cTrader uniquement)');
   }
-  function stop() { if (timer) clearInterval(timer); timer = null; if (orderFlow.stop) orderFlow.stop(); }
+  function stop() {
+    if (timer) clearInterval(timer); timer = null;
+    if (newsTimer) clearInterval(newsTimer); newsTimer = null;
+    if (news && typeof news.stop === 'function') news.stop();
+    if (orderFlow.stop) orderFlow.stop();
+  }
 
-  return { router, manager, engine: manager.engine(OWNER), orderFlow, start, stop, _admin: () => admin };
+  return { router, manager, engine: manager.engine(OWNER), orderFlow, news, pumpNews, start, stop, _admin: () => admin };
 };
