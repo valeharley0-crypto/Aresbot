@@ -117,16 +117,95 @@ class OrderFlowHub {
   stop() { if (this.timer) clearInterval(this.timer); this.timer = null; }
 }
 
-/** Calendrier news : adaptateur sur ff-feed.js (USD, impact élevé). Aucune news inventée ; flux en erreur -> données périmées -> WAIT/BLOCK. */
+/**
+ * Calendrier news : adaptateur sur ff-feed.js (USD, impact élevé pour le moteur).
+ * RÈGLES : aucune news inventée · flux absent / en erreur -> état UNAVAILABLE (jamais d'exception, jamais d'événement fictif).
+ * Le moteur décide alors (règle news.requireData) : calendrier indisponible ou périmé -> WAIT / BLOCK.
+ * Compatible avec un feed qui expose getEvents() (ff-feed.js) ou, à défaut, getNews() / get().
+ */
 class NewsProvider {
-  constructor(feed) { this.feed = feed; }
+  constructor(feed, opts = {}) {
+    this.feed = feed || null;
+    this.pastMs = opts.pastMs || 3 * 3600e3;
+    this.futureMs = opts.futureMs || 36 * 3600e3;
+  }
   name() { return 'Forex Factory (flux faireconomy)'; }
-  start() { this.feed.start(); }
-  status() { return this.feed.status(); }
+  start() {
+    try { if (this.feed && typeof this.feed.start === 'function') this.feed.start(); }
+    catch (e) { console.warn('[news] démarrage du feed impossible:', e && e.message); }
+    return this.status();
+  }
+  stop() { try { if (this.feed && typeof this.feed.stop === 'function') this.feed.stop(); } catch (e) { /* ignore */ } }
+  refresh() {
+    try { return Promise.resolve(this.feed && typeof this.feed.refresh === 'function' ? this.feed.refresh() : []).catch(() => []); }
+    catch (e) { return Promise.resolve([]); }
+  }
+  /** Événements réels du feed (tableau, jamais d'exception). */
+  _events() {
+    const f = this.feed;
+    if (!f) return [];
+    try {
+      const fn = typeof f.getEvents === 'function' ? f.getEvents
+        : (typeof f.getNews === 'function' ? f.getNews : (typeof f.get === 'function' ? f.get : null));
+      const list = fn ? fn.call(f) : [];
+      return Array.isArray(list) ? list : [];
+    } catch (e) { return []; }
+  }
+  /** { state: AVAILABLE | STALE | UNAVAILABLE, available, fetchedAt (ms | null), items, error, source ... } */
+  status() {
+    let s = null;
+    try { s = this.feed && typeof this.feed.status === 'function' ? this.feed.status() : null; } catch (e) { s = null; }
+    const fetchedAt = s && Number(s.fetchedAt) > 0 ? Number(s.fetchedAt) : null;
+    const state = fetchedAt ? (s.state === 'STALE' ? 'STALE' : 'AVAILABLE') : 'UNAVAILABLE';
+    return Object.assign({}, s || {}, {
+      provider: this.name(),
+      state,
+      available: !!fetchedAt,
+      fetchedAt,
+      items: s && Number.isFinite(s.items) ? s.items : this._events().length,
+      error: (s && s.lastError) || (this.feed ? null : 'aucun feed configuré')
+    });
+  }
+  static _ts(e) {
+    if (Number.isFinite(e.ts)) return e.ts;
+    const t = Date.parse(e.time || e.date || e.publishedAt);
+    return Number.isFinite(t) ? t : NaN;
+  }
+  static _ccy(e) { return String(e.currency || e.country || '').toUpperCase(); }
+  /** Événements USD à fort impact pour le moteur (format attendu par engine.setNews). */
   upcoming(now = Date.now()) {
-    return this.feed.getEvents()
-      .filter(e => e.country === 'USD' && e.impact === 'high' && e.ts > now - 3 * 3600e3 && e.ts < now + 36 * 3600e3)
-      .map(e => ({ title: e.name, time: new Date(e.ts).toISOString(), currency: 'USD', impact: 'high', category: e.category, forecast: e.forecast, previous: e.previous, actual: null }));
+    return this._events()
+      .filter(e => {
+        const t = NewsProvider._ts(e);
+        return NewsProvider._ccy(e) === 'USD' && String(e.impact).toLowerCase() === 'high' &&
+          Number.isFinite(t) && t > now - this.pastMs && t < now + this.futureMs;
+      })
+      .map(e => {
+        const t = NewsProvider._ts(e);
+        return { title: e.name || e.title, time: new Date(t).toISOString(), currency: 'USD', impact: 'high', category: e.category || null, forecast: e.forecast === undefined ? null : e.forecast, previous: e.previous === undefined ? null : e.previous, actual: null };
+      });
+  }
+  /**
+   * Calendrier réel pour l'interface (NEWS). Filtres : currency (défaut USD), impacts (défaut high,medium), days (défaut 7), pastHours (défaut 12).
+   * Valeurs prévision / précédent : texte du flux (ex. « 0.3% »), null si non publié.
+   */
+  calendar({ now = Date.now(), currency = 'USD', impacts = ['high', 'medium'], days = 7, pastHours = 12 } = {}) {
+    const cur = currency ? String(currency).toUpperCase() : null;
+    const imp = (Array.isArray(impacts) ? impacts : String(impacts).split(',')).map(x => String(x).trim().toLowerCase()).filter(Boolean);
+    const from = now - Math.max(0, Number(pastHours) || 0) * 3600e3, to = now + Math.max(1, Number(days) || 7) * 86400e3;
+    return this._events()
+      .filter(e => {
+        const t = NewsProvider._ts(e);
+        return Number.isFinite(t) && t >= from && t <= to && (!cur || NewsProvider._ccy(e) === cur) && (!imp.length || imp.includes(String(e.impact).toLowerCase()));
+      })
+      .sort((a, b) => NewsProvider._ts(a) - NewsProvider._ts(b))
+      .map(e => ({
+        id: e.id || null, title: e.name || e.title, time: new Date(NewsProvider._ts(e)).toISOString(), currency: NewsProvider._ccy(e), impact: String(e.impact).toLowerCase(),
+        category: e.category || null,
+        forecast: e.forecastText !== undefined ? e.forecastText : (e.forecast === undefined || e.forecast === null ? null : String(e.forecast)),
+        previous: e.previousText !== undefined ? e.previousText : (e.previous === undefined || e.previous === null ? null : String(e.previous)),
+        actual: e.actualText !== undefined ? e.actualText : null
+      }));
   }
 }
 module.exports = { MarketDataProvider, CTraderMarketData, FlowSource, OrderFlowHub, NewsProvider, sanitizeFlow, PushOrderFlowProvider: OrderFlowHub };
