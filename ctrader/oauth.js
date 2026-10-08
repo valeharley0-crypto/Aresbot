@@ -103,17 +103,19 @@ class CTraderOAuth {
 
     let response;
 
+    // Documentation Spotware : GET /apps/token?grant_type=...&client_id=...&client_secret=...
+    // Repli sur POST (formulaire) si le GET n'est pas accepté.
+    const attempt = async method => {
+      const url = method === 'GET' ? `${TOKEN_URL}?${body.toString()}` : TOKEN_URL;
+      const init = method === 'GET'
+        ? { method: 'GET', headers: { 'Accept': 'application/json' } }
+        : { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' }, body: body.toString() };
+      return fetch(url, init);
+    };
+
     try {
-      response = await fetch(TOKEN_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type':
-            'application/x-www-form-urlencoded',
-          'Accept':
-            'application/json'
-        },
-        body: body.toString()
-      });
+      response = await attempt('GET');
+      if (response.status === 404 || response.status === 405) response = await attempt('POST');
     } catch (error) {
       throw new Error(
         'cTrader OAuth inaccessible : ' +
