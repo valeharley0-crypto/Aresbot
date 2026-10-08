@@ -148,12 +148,19 @@ class CTraderOAuth {
       );
     }
 
+    // Spotware peut répondre HTTP 200 avec { errorCode, description } et sans jeton.
+    if (data && !data.accessToken && data.access_token) data.accessToken = data.access_token;
+    if (data && !data.refreshToken && data.refresh_token) data.refreshToken = data.refresh_token;
+
     if (
       !data ||
       !data.accessToken
     ) {
+      const why = data && (data.errorCode || data.error || data.description || data.error_description);
+      const keys = data && typeof data === 'object' ? Object.keys(data).join(',') : typeof data;
       throw new Error(
-        'cTrader OAuth : accessToken absent dans la réponse'
+        'cTrader OAuth : accessToken absent' +
+        (why ? ` — ${String(why).slice(0, 120)}` : ` (champs reçus : ${keys.slice(0, 80)}, HTTP ${response.status})`)
       );
     }
 
