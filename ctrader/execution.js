@@ -383,34 +383,39 @@ class CTraderSession {
         < 2 * 86400000
     ) {
 
-      const n =
-        await this.oauth.refresh(
-          t.refreshToken
-        );
+      try {
+        const n =
+          await this.oauth.refresh(
+            t.refreshToken
+          );
 
-      this.tokens.set(
-        this.userId,
-        mergeToken(
-          this.tokens,
+        this.tokens.set(
           this.userId,
-          {
-            accessToken:
-              n.accessToken,
+          mergeToken(
+            this.tokens,
+            this.userId,
+            {
+              accessToken:
+                n.accessToken,
 
-            refreshToken:
-              n.refreshToken ||
-              t.refreshToken,
+              refreshToken:
+                n.refreshToken ||
+                t.refreshToken,
 
-            expiresAt:
-              n.expiresAt
-          }
-        )
-      );
-
-      t =
-        this.tokens.get(
-          this.userId
+              expiresAt:
+                n.expiresAt
+            }
+          )
         );
+
+        t =
+          this.tokens.get(
+            this.userId
+          );
+      } catch (e) {
+        // Refresh raté : on garde le token actuel (peut encore être valide) au lieu de tout bloquer
+        this.log('refresh préventif:', e && e.message);
+      }
     }
 
     return t;
