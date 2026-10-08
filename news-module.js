@@ -21,7 +21,8 @@
     error: '',        // '' | 'key' | 'net'
     selected: null,
     lastList: '',
-    lastStatus: ''
+    lastStatus: '',
+    lastLive: ''
   };
 
   function api(path) {
@@ -87,6 +88,71 @@
     state.lastStatus = sig;
     box.className = cls;
     box.innerHTML = html;
+  }
+
+
+  /* ---------- carte « NEWS À VENIR » : annonce T-2h · analyse IA T-1h · entrée robot T-1min ---------- */
+  var PAIRS = [['XAUUSD', 'XAU/USD'], ['EURUSD', 'EUR/USD'], ['GBPUSD', 'GBP/USD'], ['USDJPY', 'USD/JPY'], ['USDCHF', 'USD/CHF'], ['USDCAD', 'USD/CAD']];
+
+  function hms(sec) {
+    if (sec == null || !isFinite(sec)) return '—';
+    var neg = sec < 0; sec = Math.abs(Math.round(sec));
+    var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+    return (neg ? '-' : '') + [h, m, s].map(function (x) { return String(x).padStart(2, '0'); }).join(':');
+  }
+
+  function phaseHtml(m, secLeft) {
+    var t = m.timing || {}, aMin = t.analysisBeforeMin || 60, eSec = t.executeBeforeSec || 60;
+    var steps = [
+      { k: 'ann', label: 'Annonce', sub: 'T-' + ((t.announceBeforeMin || 120) / 60) + 'h', on: true },
+      { k: 'ana', label: 'Analyse IA', sub: 'T-' + aMin + ' min', on: secLeft <= aMin * 60 },
+      { k: 'ent', label: 'Entrée robot', sub: 'T-' + Math.round(eSec / 60) + ' min', on: secLeft <= eSec }
+    ];
+    return '<div style="display:flex;gap:6px;margin:10px 0">' + steps.map(function (x) {
+      return '<div style="flex:1;text-align:center;padding:6px 2px;border-radius:10px;font-size:11px;border:1px solid ' +
+        (x.on ? 'var(--cyan,#00d4ff)' : 'var(--line,#26324a)') + ';color:' + (x.on ? 'var(--cyan,#00d4ff)' : 'var(--muted,#8292aa)') + '">' +
+        (x.on ? '✔ ' : '') + '<b>' + x.label + '</b><br>' + x.sub + '</div>';
+    }).join('') + '</div>';
+  }
+
+  function pairsHtml(m) {
+    var a = m.bias || {}, pb = a.pairBias, traded = (m.tradeSymbols || []);
+    if (!pb) return '<div class="ai-note">Analyse IA : ' + esc(a.bias === 'PENDING' ? 'en attente (démarre à T-' + ((m.timing && m.timing.analysisBeforeMin) || 60) + ' min).' : (a.reason || 'DATA_UNAVAILABLE')) + '</div>';
+    return '<div style="font-size:11px;color:var(--muted,#8292aa);margin-top:6px;text-transform:uppercase">Biais par paire · pré-news</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">' + PAIRS.map(function (p) {
+        var b = pb[p[0]] || { bias: 'NEUTRAL', confidence: 0 };
+        var col = b.bias === 'BUY' ? '#00e676' : b.bias === 'SELL' ? '#ff3d71' : '#8292aa';
+        var arrow = b.bias === 'BUY' ? '▲ ' : b.bias === 'SELL' ? '▼ ' : '';
+        var isT = traded.indexOf(p[0]) >= 0;
+        return '<span style="padding:5px 10px;border-radius:999px;border:1px solid ' + col + ';color:' + col + ';font-size:12px;font-weight:700">' +
+          p[1] + ' ' + arrow + esc(b.bias) + (b.confidence ? ' ' + b.confidence + '%' : '') + (isT ? ' 🤖' : '') + '</span>';
+      }).join('') + '</div>' +
+      '<div class="ai-note">🤖 = paire tradée par le robot (' + esc(traded.join(' + ')) + '). ' + esc(a.reason || '') + '</div>';
+  }
+
+  function drawLive() {
+    var host = $('newsLiveBox');
+    if (!host) {
+      var ref = $('newsAutoTradeStatus');
+      if (!ref || !ref.parentNode) return;
+      host = document.createElement('div'); host.id = 'newsLiveBox';
+      ref.parentNode.insertBefore(host, ref.nextSibling);
+    }
+    var m = state.mentor, html = '';
+    if (m && !state.error && !m.dataStale && m.announced && m.event) {
+      var e = m.event, secLeft = Math.round((Date.parse(e.time) - Date.now()) / 1000);
+      var ex = m.execution;
+      html = '<div style="margin:10px 0;padding:12px;border-radius:14px;background:var(--panel-2,#0f1a2e);border:1px solid #ff3d71;border-left-width:4px">' +
+        '<div style="font-size:11px;color:#ff3d71;font-weight:800;letter-spacing:.06em">🚨 NEWS HIGH IMPACT ' + (secLeft > 0 ? 'À VENIR' : 'PUBLIÉE') + '</div>' +
+        '<div style="font-size:16px;font-weight:800;margin:4px 0">' + esc(e.title) + '</div>' +
+        '<div style="font-family:\'JetBrains Mono\',monospace;font-size:20px;font-weight:800">' + (secLeft > 0 ? 'News in : ' + hms(secLeft) : 'Publiée') + '</div>' +
+        phaseHtml(m, secLeft) +
+        '<div style="display:flex;gap:16px;font-size:12px"><span>Forecast <b>' + val(e.forecast) + '</b></span><span>Previous <b>' + val(e.previous) + '</b></span><span>Actual <b>' + val(e.actual) + '</b></span></div>' +
+        pairsHtml(m) +
+        (ex ? '<div style="margin-top:8px;font-size:12px">Exécution : <b>' + esc(ex.status) + '</b>' + (ex.reason ? ' — ' + esc(ex.reason) : '') + '</div>' : '') +
+        '</div>';
+    }
+    if (html !== state.lastLive) { state.lastLive = html; host.innerHTML = html; }
   }
 
   /* ---------- liste du calendrier ---------- */
@@ -172,10 +238,11 @@
       api('/api/mentor/news').then(function (j) { state.mentor = j; })
     ]).then(function () { state.error = ''; })
       .catch(fail)
-      .then(function () { drawStatus(); drawList(); });
+      .then(function () { drawStatus(); drawList(); drawLive(); });
   }
 
   function tick() { if (visible()) refresh(); }
+  setInterval(function () { if (visible()) drawLive(); }, 1000);   // compte à rebours HH:MM:SS
 
   /* ---------- API publique ---------- */
   window.AresNews = {
@@ -198,7 +265,7 @@
     if (t) setTimeout(refresh, 250);
   });
 
-  setInterval(tick, 20000);
+  setInterval(tick, 5000);
   setTimeout(function () { drawStatus(); drawList(); tick(); }, 1500);
   // Le garde-fou Auto Trade a besoin de l'état de pause même quand l'onglet NEWS est fermé.
   setInterval(function () {
