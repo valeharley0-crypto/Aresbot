@@ -23,8 +23,12 @@ class CTraderOAuth {
     redirectUri = process.env.CTRADER_REDIRECT_URI
   } = {}) {
     const t = v => (v == null ? v : String(v).replace(/\s+#.*$/, '').replace(/^["'\s]+|["'\s]+$/g, '').replace(/\s+/g, ''));
-    this.clientId = t(clientId);
-    this.clientSecret = t(clientSecret);
+    // Client ID / Secret : uniquement lettres, chiffres, _ - . ~ (retire les caractères invisibles collés par erreur)
+    const strict = v => (v == null ? v : String(v).replace(/[^A-Za-z0-9_\-.~]/g, ''));
+    const idT = t(clientId), secT = t(clientSecret);
+    this.clientId = strict(idT);
+    this.clientSecret = strict(secT);
+    this.strippedChars = (idT ? idT.length - this.clientId.length : 0) + (secT ? secT.length - this.clientSecret.length : 0);
     this.redirectUri = t(redirectUri);
   }
 
@@ -156,11 +160,11 @@ class CTraderOAuth {
       !data.accessToken
     ) {
       const why = data && [data.errorCode || data.error, data.description || data.error_description].filter(Boolean).join(' : ') +
-        ' | client_id(' + String(this.clientId).length + ' car.) secret(' + String(this.clientSecret).length + ' car.)';
+        ' | client_id=' + this.clientId + ' secret(' + String(this.clientSecret).length + ' car.) retirés=' + this.strippedChars + ' redirect=' + this.redirectUri;
       const keys = data && typeof data === 'object' ? Object.keys(data).join(',') : typeof data;
       throw new Error(
         'cTrader OAuth : accessToken absent' +
-        (why ? ` — ${String(why).slice(0, 220)}` : ` (champs reçus : ${keys.slice(0, 80)}, HTTP ${response.status})`)
+        (why ? ` — ${String(why).slice(0, 400)}` : ` (champs reçus : ${keys.slice(0, 80)}, HTTP ${response.status})`)
       );
     }
 
