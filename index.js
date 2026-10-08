@@ -171,9 +171,9 @@ module.exports = function createMentor(express, opts = {}) {
   }));
 
   // ---------- cTrader : autorisation OAuth + compte ----------
-  router.get('/api/ctrader/status', readLimit, auth, safe(req => Object.assign({ ok: true, configured: manager.oauth.configured(), tokenStorage: manager.tokens.available() }, manager.sessionStatus(req.user.userId))));
+  router.get('/api/ctrader/status', readLimit, auth, safe(req => Object.assign({ ok: true, configured: manager.oauth.configured(), tokenStorage: manager.tokens.keyConfigured ? manager.tokens.keyConfigured() : manager.tokens.available() }, manager.sessionStatus(req.user.userId))));
   router.get('/api/ctrader/connect-url', authLimit, auth, safe(req => {
-    if (!manager.tokens.available()) throw new Error('TOKEN_ENCRYPTION_KEY non configurée sur le serveur');
+    if (!(manager.tokens.keyConfigured ? manager.tokens.keyConfigured() : manager.tokens.available())) throw new Error('TOKEN_ENCRYPTION_KEY non configurée sur le serveur (≥ 16 caractères)');
     return { ok: true, url: manager.oauth.buildAuthUrl(req.user.userId, 'trading') };
   }));
   router.get('/api/ctrader/callback', authLimit, async (req, res) => {   // redirection navigateur depuis id.ctrader.com : protégée par le « state » à usage unique
