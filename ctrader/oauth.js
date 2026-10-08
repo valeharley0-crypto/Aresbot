@@ -21,7 +21,7 @@ class CTraderOAuth {
     clientSecret = process.env.CTRADER_CLIENT_SECRET,
     redirectUri = process.env.CTRADER_REDIRECT_URI
   } = {}) {
-    const t = v => (v == null ? v : String(v).replace(/^["'\s]+|["'\s]+$/g, ''));
+    const t = v => (v == null ? v : String(v).replace(/\s+#.*$/, '').replace(/^["'\s]+|["'\s]+$/g, '').replace(/\s+/g, ''));
     this.clientId = t(clientId);
     this.clientSecret = t(clientSecret);
     this.redirectUri = t(redirectUri);
@@ -157,7 +157,7 @@ class CTraderOAuth {
       !data ||
       !data.accessToken
     ) {
-      const why = data && [data.errorCode || data.error, data.description || data.error_description].filter(Boolean).join(' : ') + ' | redirect=' + this.redirectUri;
+      const why = data && [data.errorCode || data.error, data.description || data.error_description].filter(Boolean).join(' : ') + ' | id=' + String(this.clientId).slice(0, 6) + '…' + String(this.clientId).slice(-4) + '(' + String(this.clientId).length + ') secret=' + String(this.clientSecret).slice(0, 2) + '…' + String(this.clientSecret).slice(-2) + '(' + String(this.clientSecret).length + ')';
       const keys = data && typeof data === 'object' ? Object.keys(data).join(',') : typeof data;
       throw new Error(
         'cTrader OAuth : accessToken absent' +
