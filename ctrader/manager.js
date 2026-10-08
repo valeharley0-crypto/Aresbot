@@ -289,7 +289,12 @@ async seedFromEnv(userId = 'owner') {
   const accessToken = clean(process.env.CTRADER_ACCESS_TOKEN);
   if (!accessToken) return false;
   const refreshToken = clean(process.env.CTRADER_REFRESH_TOKEN) || null;
-  this.tokens.set(userId, { accessToken, refreshToken, expiresAt: null });
+  let existing = null;
+  try { existing = this.tokens.get(userId); } catch (_) {}
+  // Ne jamais écraser un token déjà voatahiry (mety efa nohavaozina : ny taloha dia maty)
+  if (!(existing && existing.accessToken)) {
+    this.tokens.set(userId, { accessToken, refreshToken, expiresAt: null });
+  }
   const session = this._getSession(userId);
   try { await session.stop(); } catch (_) {}
   await session.start();
@@ -346,12 +351,6 @@ if (!code) {
   );
 }
 
-if (!state) {
-  throw new Error(
-    'state OAuth manquant'
-  );
-}
-
 let saved =
   this.oauthStates.get(
     String(state)
@@ -371,8 +370,27 @@ if (
   };
 }
 
-if (!saved) {
+if (!saved && state) {
   saved = this._verifySignedState(state);
+}
+
+/*
+ * cTrader peut renvoyer seulement ?code=... sans « state » (cf. doc Spotware).
+ * Dans ce cas : on rattache le code à la demande de connexion la plus récente
+ * (valable 10 min), uniquement s'il n'y a qu'un seul utilisateur en attente.
+ */
+if (!saved && !state) {
+  this._cleanupStates();
+  const users = new Set();
+  let last = null;
+  for (const [k, d] of this.oauthStates) {
+    users.add(d.userId);
+    if (!last || d.createdAt > last.d.createdAt) last = { k, d };
+  }
+  if (users.size === 1 && last) {
+    saved = last.d;
+    state = last.k;
+  }
 }
 
 if (!saved) {
