@@ -753,6 +753,28 @@ return results;
 * =========================================================
   */
 
+heartbeatNews(at) {
+  for (const [userId, session] of this.sessions) {
+    try {
+      const e = session && session.engine;
+      if (e && typeof e.newsFeedHeartbeat === 'function') e.newsFeedHeartbeat(at);
+    } catch (error) {
+      this.log('news heartbeat error', userId, error && error.message);
+    }
+  }
+  return { ok: true };
+}
+
+async closeAll(userId = 'owner', reason = 'demande utilisateur') {
+  const id = String(userId || 'owner');
+  const session = this.sessions.get(id);
+  if (!session || typeof session.closeAll !== 'function') {
+    return { ok: false, error: 'aucune session cTrader' };
+  }
+  await session.closeAll(reason);
+  return { ok: true };
+}
+
 broadcastNews(events) {
 
 const list =
@@ -771,6 +793,11 @@ for (
 
     const engine =
       session.engine;
+
+    if (engine && typeof engine.setNews === 'function') {
+      engine.setNews(list);
+      continue;
+    }
 
     if (
       engine &&
