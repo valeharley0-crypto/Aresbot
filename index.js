@@ -187,7 +187,7 @@ module.exports = function createMentor(express, opts = {}) {
       if (!req.query.code) throw new Error('code d\'autorisation absent');
       await manager.handleCallback(String(req.query.code), req.query.state ? String(req.query.state) : '', process.env.CTRADER_SINGLE_USER_FALLBACK === '1' ? OWNER : null);
       res.redirect(back + (back.includes('?') ? '&' : '?') + 'ctrader=ok');
-    } catch (e) { console.error('[ctrader] callback:', String((e && e.message) || e).slice(0, 300)); const why = encodeURIComponent(String((e && e.message) || e).replace(/(client_secret|code|token)=[^&\s]+/gi, '$1=***').slice(0, 160)); res.redirect(back + (back.includes('?') ? '&' : '?') + 'ctrader=error&reason=' + why); }
+    } catch (e) { console.error('[ctrader] callback:', String((e && e.message) || e).slice(0, 300)); const why = encodeURIComponent(String((e && e.message) || e).replace(/(client_secret|code|token)=[^&\s]+/gi, '$1=***').slice(0, 400)); res.redirect(back + (back.includes('?') ? '&' : '?') + 'ctrader=error&reason=' + why); }
   });
   router.post('/api/ctrader/account', writeLimit, auth, json, safe(async req => {
     const id = String(req.body && req.body.accountId || ''); if (!/^\d{1,18}$/.test(id)) throw new Error('accountId invalide');
