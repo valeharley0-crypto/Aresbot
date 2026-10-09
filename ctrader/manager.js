@@ -291,8 +291,15 @@ async seedFromEnv(userId = 'owner') {
   const refreshToken = clean(process.env.CTRADER_REFRESH_TOKEN) || null;
   let existing = null;
   try { existing = this.tokens.get(userId); } catch (_) {}
-  // Ne jamais écraser un token déjà voatahiry (mety efa nohavaozina : ny taloha dia maty)
-  if (!(existing && existing.accessToken)) {
+  /*
+   * - Aucun token voatahiry                         -> on enregistre celui des variables Render
+   * - Token voatahiry déjà rafraîchi / issu d'OAuth  -> on le garde (expiresAt défini)
+   * - Token voatahiry issu d'anciennes variables ET différent de celui du Render -> on le remplace
+   *   (y compris l'ancien compte sélectionné) : le nouveau token Playground doit être utilisé.
+   */
+  const stale = existing && existing.accessToken && existing.accessToken !== accessToken && !existing.expiresAt;
+  if (stale) { try { this.tokens.remove(userId); } catch (_) {} }
+  if (!(existing && existing.accessToken) || stale) {
     this.tokens.set(userId, { accessToken, refreshToken, expiresAt: null });
   }
   const session = this._getSession(userId);
