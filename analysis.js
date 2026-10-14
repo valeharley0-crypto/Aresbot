@@ -21,7 +21,7 @@ const DEFAULT_ANALYSIS = {
   minScore: 6,            // score de confluence minimal
   minComponents: 3,       // nb minimal de composants validés
   weights: { structure: 3, mtf: 2, trigger: 2, sweep: 2, zone: 2, premiumDiscount: 1, orderFlow: 2 },
-  orderFlow: { enabled: false, requireWhenEnabled: true }   // true : filtre ON + donnée indisponible -> WAIT
+  orderFlow: { enabled: false, requireWhenEnabled: false }   // true : filtre ON + donnée indisponible -> WAIT
 };
 
 function atr(cs, n) {
@@ -127,7 +127,7 @@ const inZone = (z, p, tol) => z && p >= z.lo - tol && p <= z.hi + tol;
 function evaluate(ctx) {
   const cfg = Object.assign({}, DEFAULT_ANALYSIS, ctx.cfg || {});
   cfg.weights = Object.assign({}, DEFAULT_ANALYSIS.weights, (ctx.cfg || {}).weights || {});
-  cfg.orderFlow = Object.assign({}, DEFAULT_ANALYSIS.orderFlow, (ctx.cfg || {}).orderFlow || {});
+  cfg.orderFlow = { enabled: false, requireWhenEnabled: false };   // Order Flow supprimé
   const W = cfg.weights, out = comps => ({ action: 'WAIT', confidence: 0, score: 0, maxScore: 0, components: comps || [] });
   const wait = (why, comps) => Object.assign(out(comps), { wait: why });
   const tf = ctx.tf, cs = (ctx.candles[tf.structure] || []), ce = (ctx.candles[tf.entry] || []), ch = (ctx.candles[tf.htf] || []);
