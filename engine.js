@@ -10,6 +10,7 @@ const fs = require('fs');
 const path = require('path');
 const risk = require('./risk');
 const analysis = require('./analysis');
+const newsCore = require('./news-core');          // NEWS USA importantes seulement (NFP, CPI, FOMC...)
 const fundamental = require('./fundamental');   // analyse fondamentale USD (IA Mentor) : plus de Gemini, jamais de NEUTRAL
 
 const FOREX_SYM = { pointSize: 0.00001, contractSize: 100000, maxDevPts: 80 };   // 1 point = 1/10 de pip (5 décimales)
@@ -61,14 +62,20 @@ const DEFAULTS = {
     accountSize: null, profitTarget: null, dailyLossLimit: null, maxOverallLoss: null,
     maxTrades: null, maxRiskPerTradeMoney: null, minTradingDays: null, consistencyMaxDayPct: null
   },
-  opr: { sessions: [] },         // [{days:[1,2,3,4,5], start:'08:30', end:'09:30'}] (heure locale du fuseau)
+  opr: {                         // OPR : stratégie XAUUSD M5 (range d'ouverture + RSI), robot AUTOMATIQUE séparé de l'IA Mentor
+    enabled: false, autoTrade: false, pauseMentor: true,   // pendant la fenêtre OPR l'IA Mentor est en PAUSE, l'OPR continue seul
+    tz: 'Europe/Paris', symbol: 'XAUUSD',
+    oprStart: '02:25', oprEnd: '02:35', greenStart: '02:35', redStart: '04:15',   // heure française
+    minPips: 300, maxPips: 1900, rsiLen: 7, rsiOB: 95, rsiOS: 35, slMaxPips: 10000, rr: 2, riskPct: 1, noFriday: true,
+    sessions: []                 // fenêtres supplémentaires [{days:[1,2,3,4,5], start:'08:30', end:'09:30'}] (heure du fuseau de config)
+  },
   news: {
     enabled: true, autoTrade: false, requireData: true, maxStaleMin: 180,   // requireData : calendrier indisponible/périmé -> WAIT/BLOCK
-    relevantCurrencies: ['USD'], impacts: ['high'],
+    relevantCurrencies: ['USD'], impacts: ['high'], coreOnly: true,   // coreOnly : NFP, CPI, PCE, FOMC... seulement
     announceBeforeMin: 120, pauseBeforeMin: 60, analysisBeforeMin: 60, executeBeforeSec: 60, resumeAfterMin: 10,   // T-2h : annonce · T-1h : analyse IA + pause · T-1min : entrée robot
     slPoints: 10, tpPoints: 10, tp2Points: 20,
     perSymbol: { default: { slPoints: 100, tpPoints: 100, tp2Points: 200 }, XAUUSD: { slPoints: 10, tpPoints: 10, tp2Points: 20 } },
-    minConfidence: 55, minDeviationPct: 2, riskPerTradePct: 0.5,
+    minConfidence: 70, minDeviationPct: 2, riskPerTradePct: 0.5,   // 70 % minimum pour entrer sur une news
     symbols: ['XAUUSD', 'EURUSD']
   }
 };
@@ -139,6 +146,11 @@ function createEngine(opts = {}) {
     n.symbols = ['XAUUSD', 'EURUSD'];
     S.newsTimingVer = 1;
   }
+  if (S.scoreVer !== 1) {   // migration : score minimum 70 % (SCALPING, DAYTRADE, NEWS) + news core seulement
+    S.config.news.minConfidence = 70; S.config.news.coreOnly = true;
+    S.config.analysis.minConfidencePct = 70;
+    S.scoreVer = 1;
+  }
   delete S.candles;
   if (!S.autoState) S.autoState = {};
   if (!S.autoState.scan) S.autoState.scan = {};
@@ -170,11 +182,13 @@ function createEngine(opts = {}) {
   const hhmmUTC = () => { const d = new Date(clock()); return String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0'); };
 
   // ---------- temps / fuseau ----------
-  function localParts(ts) {
-    const f = new Intl.DateTimeFormat('en-GB', {
-      timeZone: cfg().timezone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit',
+  const FMT = {};
+  function localParts(ts, tz) {
+    tz = tz || cfg().timezone;
+    const f = FMT[tz] || (FMT[tz] = new Intl.DateTimeFormat('en-GB', {
+      timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit',
       hour: '2-digit', minute: '2-digit', weekday: 'short'
-    });
+    }));
     const p = {}; f.formatToParts(new Date(ts)).forEach(x => { p[x.type] = x.value; });
     const dow = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }[p.weekday];
     return { date: `${p.year}-${p.month}-${p.day}`, minutes: (+p.hour) * 60 + (+p.minute), dow };
@@ -262,7 +276,17 @@ function createEngine(opts = {}) {
   const candleCounts = () => { const o = {}; for (const k of Object.keys(CANDLES)) o[k] = Object.fromEntries(TFS.map(tf => [`M${tf}`, (CANDLES[k][tf] || []).length])); return o; };
 
   // ---------- OPR ----------
+  function oprWindow(ts) {   // fenêtre de la stratégie OPR (heure française) : Mentor en pause, OPR actif
+    const O = cfg().opr;
+    if (!O || !O.enabled || !O.pauseMentor) return false;
+    const lp = localParts(ts, O.tz), st = hhmm(O.oprStart), en = hhmm(O.redStart);
+    if (st === null || en === null) return false;
+    if (O.noFriday && lp.dow === 5) return false;
+    if (lp.dow === 0 || lp.dow === 6) return false;
+    return st <= en ? (lp.minutes >= st && lp.minutes < en) : (lp.minutes >= st || lp.minutes < en);
+  }
   function oprState(ts) {
+    if (oprWindow(ts)) return { active: true, session: { start: cfg().opr.oprStart, end: cfg().opr.redStart, tz: cfg().opr.tz } };
     const lp = localParts(ts);
     for (const s of cfg().opr.sessions || []) {
       const st = hhmm(s.start), en = hhmm(s.end);
@@ -277,7 +301,8 @@ function createEngine(opts = {}) {
   // ---------- news ----------
   const relevant = ev => cfg().news.enabled &&
     cfg().news.relevantCurrencies.map(x => x.toUpperCase()).includes(String(ev.currency).toUpperCase()) &&
-    cfg().news.impacts.map(x => x.toLowerCase()).includes(String(ev.impact).toLowerCase());
+    cfg().news.impacts.map(x => x.toLowerCase()).includes(String(ev.impact).toLowerCase()) &&
+    (!cfg().news.coreOnly || newsCore.isCore(ev.title));
 
   function setNews(events) {
     const errors = [];
@@ -440,7 +465,7 @@ function createEngine(opts = {}) {
     const sym = symOf(p.symbol), sp = specOf(sym);
     if (!sp) return bad('SIGNAL', 'symbole non supporté: ' + sym + ' (ajouter dans config.symbols)');
     if (!(c.symbolsAllowed || []).includes(sym)) return bad('SIGNAL', 'symbole non autorisé par l\'utilisateur: ' + sym);
-    if (p.source !== 'NEWS' && !modeAllowsSym(mode, sym)) return bad('SIGNAL', `${mode} : ${sym} non autorisé (symboles du mode : ${m.symbols.join(', ')})`);
+    if (p.source !== 'NEWS' && p.source !== 'OPR' && !modeAllowsSym(mode, sym)) return bad('SIGNAL', `${mode} : ${sym} non autorisé (symboles du mode : ${m.symbols.join(', ')})`);
     if (!c.liveExecution) return bad('SIGNAL', 'exécution désactivée par l\'admin (GLOBAL_LIVE_ALLOWED=0) : aucun ordre envoyé');
     if (c.session && c.session.enabled && hhmmUTC() >= c.session.noEntryAfterUTC) return bad('SIGNAL', `plus d'entrée après ${c.session.noEntryAfterUTC} UTC (session)`);
     if (!['BUY', 'SELL'].includes(p.action)) return bad('SIGNAL', 'action doit être BUY ou SELL');
@@ -453,7 +478,7 @@ function createEngine(opts = {}) {
     }
     let entry = num(p.entry), sl = num(p.sl), tp = num(p.tp1) !== null ? num(p.tp1) : num(p.tp);
     const tp2 = num(p.tp2), tp3 = num(p.tp3);
-    if (p.source === 'NEWS') entry = price.mid;
+    if (p.source === 'NEWS' || p.source === 'OPR') entry = price.mid;
     if (entry === null || sl === null || tp === null) return bad('SIGNAL', 'entry/sl/tp numériques requis');
     const buy = p.action === 'BUY';
     if (buy ? !(sl < entry && entry < tp) : !(tp < entry && entry < sl)) return bad('SIGNAL', 'incohérence SL/Entry/TP pour ' + p.action);
@@ -464,8 +489,8 @@ function createEngine(opts = {}) {
     const slPts = r2(Math.abs(entry - sl) / sp.pointSize);
     let tpPts = r2(Math.abs(tp - entry) / sp.pointSize);
     const slEq = r2(slPts * eqF), tp1Eq = r2(tpPts * eqF);
-    if (slEq > m.slMax + 1e-9) return bad('SIGNAL', `SL ${slEq} pts-or > maximum ${m.slMax} (${mode})`);
-    if (p.source !== 'NEWS' && tp1Eq < m.tp1 - 0.05) return bad('SIGNAL', `TP1 ${tp1Eq} pts-or < minimum ${m.tp1} (${mode})`);
+    if (p.source !== 'OPR' && slEq > m.slMax + 1e-9) return bad('SIGNAL', `SL ${slEq} pts-or > maximum ${m.slMax} (${mode})`);
+    if (p.source !== 'NEWS' && p.source !== 'OPR' && tp1Eq < m.tp1 - 0.05) return bad('SIGNAL', `TP1 ${tp1Eq} pts-or < minimum ${m.tp1} (${mode})`);
     const spreadEq = price.ask && price.bid ? r2((price.ask - price.bid) / sp.pointSize * eqF) : 0;
     if (spreadEq > m.maxSpread) return bad('SIGNAL', `spread ${spreadEq} pts-or > maximum ${m.maxSpread} (${mode})`);
     ok('SIGNAL', `${mode} ${sym} ${p.action} entry ${entry} SL ${slPts}pts TP1 ${tpPts}pts` + (tp2 !== null ? ` TP2 ${r2(Math.abs(tp2 - entry) / sp.pointSize)}pts` : '') + (tp3 !== null ? ` TP3 ${r2(Math.abs(tp3 - entry) / sp.pointSize)}pts` : '') + ` · spread ${spreadEq} pts-or (prix ${price.src})`);
@@ -477,10 +502,10 @@ function createEngine(opts = {}) {
     const dd = risk.drawdownState(S.peakEquity, b.equity, rk.maxDrawdownPct);
     if (!dd.ok) return bad('RISK', `drawdown ${dd.pct}% ≥ ${rk.maxDrawdownPct}% (max drawdown)`);
     const cl = risk.consecutiveLossState(S.day.consecLosses || 0, rk.maxConsecutiveLosses);
-    if (!cl.ok) return bad('RISK', `${cl.losses} pertes consécutives (max ${cl.max})`);
-    if (new Set(activeTrades().map(t => t.setupId || t.id)).size >= c.maxActiveTrades) return bad('RISK', `trade IA déjà actif (max ${c.maxActiveTrades})`);
-    if (c.combined && p.source !== 'NEWS' && activeTrades().some(t => t.tradingMode === mode && t.mode !== 'NEWS')) return bad('RISK', `${mode} : un setup est déjà actif pour ce mode`);
-    const pct = p.source === 'NEWS' ? c.news.riskPerTradePct : c.riskPerTradePct;
+    if (p.source !== 'OPR' && !cl.ok) return bad('RISK', `${cl.losses} pertes consécutives (max ${cl.max})`);
+    if (p.source !== 'OPR' && new Set(activeTrades().map(t => t.setupId || t.id)).size >= c.maxActiveTrades) return bad('RISK', `trade IA déjà actif (max ${c.maxActiveTrades})`);
+    if (c.combined && p.source !== 'NEWS' && p.source !== 'OPR' && activeTrades().some(t => t.tradingMode === mode && t.mode !== 'NEWS')) return bad('RISK', `${mode} : un setup est déjà actif pour ce mode`);
+    const pct = p.source === 'NEWS' ? c.news.riskPerTradePct : (p.source === 'OPR' ? c.opr.riskPct : c.riskPerTradePct);
     let cap = b.balance * pct / 100;
     const asked = num(p.risk); if (asked && asked > 0) cap = Math.min(cap, asked);
     if (c.mode === 'PROP' && c.prop.maxRiskPerTradeMoney) cap = Math.min(cap, c.prop.maxRiskPerTradeMoney);
@@ -520,15 +545,15 @@ function createEngine(opts = {}) {
       `${mult > 1 ? ` · lot ×${mult} (profit protégé)` : ''}, risque ${totalRisk}$ (${r2(totalRisk / b.balance * 100)}% du solde)`);
 
     // 3) MODE
-    if (c.active === 'OFF') return bad('MODE', 'IA Mentor désactivé (bouton OFF)');
+    if (p.source !== 'OPR' && c.active === 'OFF') return bad('MODE', 'IA Mentor désactivé (bouton OFF)');
     if (S.manualBlock) return bad('MODE', 'bloqué manuellement: ' + S.manualBlock);
-    if (oprState(ts).active) return bad('MODE', 'OPR actif : IA Mentor en pause');
+    if (p.source !== 'OPR' && oprState(ts).active) return bad('MODE', 'OPR actif : IA Mentor en pause');
     if (p.source !== 'NEWS') {
       const nc = newsContext(ts);
       if (nc.paused) return bad('MODE', `mode NEWS actif (${nc.event.title}) : trading normal suspendu`);
       if (newsStale()) return bad('MODE', 'DATA_UNAVAILABLE: calendrier news indisponible ou périmé : trading suspendu (news.requireData)');
     }
-    ok('MODE', p.source === 'NEWS' ? 'NEWS autorisé' : `${mode} autorisé · news OK`);
+    ok('MODE', p.source === 'NEWS' ? 'NEWS autorisé' : p.source === 'OPR' ? 'OPR autorisé (robot OPR indépendant de l\'IA Mentor)' : `${mode} autorisé · news OK`);
 
     // 4) RULE
     if (c.mode === 'PROP') {
@@ -537,6 +562,8 @@ function createEngine(opts = {}) {
       if (ps.remainingDailyLoss !== null && totalRisk > ps.remainingDailyLoss) return bad('RULE', `PROP RULE CHECK: risque ${totalRisk}$ > marge journalière ${ps.remainingDailyLoss}$`);
       if (ps.remainingOverallLoss !== null && totalRisk > ps.remainingOverallLoss) return bad('RULE', `PROP RULE CHECK: risque ${totalRisk}$ > marge globale ${ps.remainingOverallLoss}$`);
       ok('RULE', 'PROP RULE CHECK ok');
+    } else if (p.source === 'OPR') {
+      ok('RULE', 'OPR : règles propres à la stratégie OPR (1 trade/jour, RR ' + c.opr.rr + ')');
     } else if (p.source === 'NEWS' && !fl.locked) {
       ok('RULE', 'NEWS: limites propres à la news (voir config.news)');
     } else {
@@ -564,7 +591,7 @@ function createEngine(opts = {}) {
   }
 
   function queue(p, g, ts) {
-    const o = g.order, qMode = o.tradingMode || cfg().tradingMode, qm = modeCfg(qMode);
+    const o = g.order, isOpr = p.source === 'OPR', qMode = isOpr ? 'OPR' : (o.tradingMode || cfg().tradingMode), qm = modeCfg(isOpr ? cfg().tradingMode : qMode);
     const legs = o.legs || [{ lots: o.lots, tp: o.tp, tpPts: o.tpPts, riskMoney: o.riskMoney, tag: 'TP1' }];
     const setupId = `T${ts}-${++S.seq}`, totalLots = legs.reduce((a, x) => a + x.lots, 0), made = [];
     const comps = (p.analysis && p.analysis.components) || [];
@@ -573,8 +600,8 @@ function createEngine(opts = {}) {
     legs.forEach((lg, i) => {
       const t = {
         id: legs.length > 1 ? `${setupId}-${i + 1}` : setupId, setupId, leg: legs.length > 1 ? lg.tag : null, weight: legs.length > 1 ? lg.lots / totalLots : 1, mult: o.mult || 1,
-        ts: new Date(ts).toISOString(), user: userId, ctraderAccountId: S.exec.accountId || null, mode: p.source === 'NEWS' ? 'NEWS' : cfg().mode, tradingMode: qMode,
-        timeframe: p.source === 'NEWS' ? null : `M${qm.tf.entry}`, symbol: o.symbol,
+        ts: new Date(ts).toISOString(), user: userId, ctraderAccountId: S.exec.accountId || null, mode: p.source === 'NEWS' ? 'NEWS' : (isOpr ? 'OPR' : cfg().mode), tradingMode: qMode,
+        timeframe: p.source === 'NEWS' ? null : (isOpr ? 'M5' : `M${qm.tf.entry}`), symbol: o.symbol,
         action: o.action, entry: o.entry, sl: o.sl, tp: lg.tp, slPts: o.slPts, tpPts: lg.tpPts,
         lots: lg.lots, riskMoney: lg.riskMoney, confidence: p.analysis ? p.analysis.confidence : (p.confidence != null ? p.confidence : null), reason: p.reason || '',
         smcConditions: cond(['structure', 'mtf', 'trigger', 'sweep', 'zone', 'premiumDiscount']), orderFlowConditions: cond(['orderFlow']),
@@ -653,6 +680,31 @@ function createEngine(opts = {}) {
     save();
     return { ok: true };
   }
+  const CLOSED_ST = ['CLOSED', 'REJECTED', 'CANCELLED', 'EXPIRED'];
+  /** Résumé réel (statut, TP/SL, P/L) des trades ouverts par une news. */
+  function newsTrades(ev) {
+    const ex = ev && ev.executed; if (!ex || ex.status !== 'EXECUTED') return { trades: [], result: null };
+    const ids = ex.tradeIds || (ex.tradeId ? [ex.tradeId] : []);
+    const trades = ids.map(id => S.trades.find(x => x.id === id)).filter(Boolean).map(t => ({
+      id: t.id, symbol: t.symbol, action: t.action, leg: t.leg, lots: t.lots, entry: t.entry, sl: t.sl, tp: t.tp, status: t.status,
+      exit: t.exitPrice != null ? t.exitPrice : null, pnlMoney: t.result && t.result.pnlMoney != null ? t.result.pnlMoney : null,
+      pnlPoints: t.result && t.result.pnlPoints != null ? t.result.pnlPoints : null, outcome: t.result && t.result.outcome || null,
+      hit: t.status === 'CLOSED' ? (t.result.outcome === 'WIN' ? 'TP' : t.result.outcome === 'LOSS' ? 'SL' : 'BE') : null
+    }));
+    const open = trades.filter(t => ACTIVE.includes(t.status)).length, closed = trades.filter(t => t.status === 'CLOSED');
+    const money = r2(closed.reduce((a, t) => a + (t.pnlMoney || 0), 0)), pts = r2(closed.reduce((a, t) => a + (t.pnlPoints || 0), 0));
+    const state = !trades.length ? 'NONE' : open ? 'OPEN' : !closed.length ? 'NONE' : money > 0 ? 'WIN' : money < 0 ? 'LOSS' : 'BREAKEVEN';
+    return { trades, result: { state, open, pnlMoney: money, pnlPoints: pts, label: state === 'WIN' ? 'KILLED' : state === 'LOSS' ? 'SL HIT' : state === 'OPEN' ? 'EN COURS' : state === 'BREAKEVEN' ? 'BREAKEVEN' : '—' } };
+  }
+  function newsResult(t) {
+    const ev = S.news.find(e => e.executed && (e.executed.tradeIds || []).includes(t.id)); if (!ev) return;
+    const v = newsTrades(Object.assign({}, ev, { executed: ev.executed }));
+    // newsTrades lit S.trades : le trade courant vient d'être marqué CLOSED juste avant cet appel
+    if (!v.result || v.result.state === 'OPEN') return;
+    ev.executed.result = v.result;
+    const nm = newsCore.coreKey(ev.title) || ev.title;
+    log('NEWS RESULT', `${nm} ${v.result.label} ${v.result.state === 'WIN' ? '✅' : v.result.state === 'LOSS' ? '❌' : ''} · ${v.result.pnlMoney >= 0 ? '+' : ''}${v.result.pnlMoney}$ (${v.result.pnlPoints} pts)`, { kind: 'news', result: v.result, eventId: ev.id }, true);
+  }
   function closeTrade(t, { closePrice, pnlPoints, pnlMoney, balance, equity }) {
     const open = t.openPrice || t.entry;
     let pts = num(pnlPoints);
@@ -671,6 +723,7 @@ function createEngine(opts = {}) {
     if (!d.objectiveReached && reached) { d.objectiveReached = true; log('OBJECTIVE', `Objectif jour atteint : Protected Profit Floor ${fl.floor != null ? fl.floor : ''} activé, le robot continue (objectif, pas une promesse)`, { kind: 'obj' }, true); }
     const bal = num(balance), eq = num(equity);
     if (bal !== null) S.account = Object.assign({}, S.account, { balance: bal, equity: eq !== null ? eq : bal, ts: clock() });
+    if (t.mode === 'NEWS') newsResult(t);
     log('CLOSED', `${t.id} ${pts} pts / ${money}$`, { kind: 'result', tradeId: t.id, result: t.result, signal: { action: t.action, entry: t.entry, sl: t.sl, tp: t.tp }, risk: t.riskMoney }, true);
     save();
     return { ok: true, trade: t };
@@ -737,7 +790,7 @@ function createEngine(opts = {}) {
       targets: { tp1: m.tp1, tp2: m.tp2, tp3: m.tp3 }, orderFlow: orderFlowFor(sym), cfg: c.analysis
     });
   }
-  const modeTradesToday = mode => new Set(S.trades.filter(t => t.tradingMode === mode && t.mode !== 'NEWS' && !['REJECTED', 'EXPIRED', 'CANCELLED'].includes(t.status) && S.day && localParts(Date.parse(t.ts)).date === S.day.date).map(t => t.setupId || t.id)).size;
+  const modeTradesToday = mode => new Set(S.trades.filter(t => t.tradingMode === mode && t.mode !== 'NEWS' && t.mode !== 'OPR' && !['REJECTED', 'EXPIRED', 'CANCELLED'].includes(t.status) && S.day && localParts(Date.parse(t.ts)).date === S.day.date).map(t => t.setupId || t.id)).size;
   async function autoScan(ts) {
     const c = cfg(), st = S.autoState;
     if (!c.autoTrade || c.active === 'OFF') return;
@@ -769,6 +822,93 @@ function createEngine(opts = {}) {
     }
   }
 
+
+  // ---------- OPR : robot AUTOMATIQUE (XAUUSD M5, range d'ouverture + RSI) — indépendant de l'IA Mentor ----------
+  const OPR_PIP = 0.01;
+  function oprRsiLast(closes, len) {   // RSI de Wilder, dernière valeur
+    if (closes.length <= len) return null;
+    let g = 0, l = 0;
+    for (let i = 1; i <= len; i++) { const d = closes[i] - closes[i - 1]; if (d > 0) g += d; else l -= d; }
+    let ag = g / len, al = l / len;
+    for (let i = len + 1; i < closes.length; i++) { const d = closes[i] - closes[i - 1]; ag = (ag * (len - 1) + Math.max(d, 0)) / len; al = (al * (len - 1) + Math.max(-d, 0)) / len; }
+    return al === 0 ? 100 : 100 - 100 / (1 + ag / al);
+  }
+  /** Calcule l'état OPR du jour à partir des bougies M5 RÉELLES (cTrader). Rien d'inventé : sans bougies -> stage NO_DATA. */
+  function oprCompute(ts) {
+    const O = cfg().opr, lp = localParts(ts, O.tz), sym = symOf(O.symbol);
+    const oS = hhmm(O.oprStart), oE = hhmm(O.oprEnd), gS = hhmm(O.greenStart), rS = hhmm(O.redStart);
+    const out = { symbol: sym, date: lp.date, minutes: lp.minutes, stage: 'WAIT_RANGE', range: null, candle: null, rows: null, signal: null, note: '' };
+    if (lp.dow === 0 || lp.dow === 6) { out.stage = 'CLOSED'; out.note = 'Week-end'; return out; }
+    if (O.noFriday && lp.dow === 5) { out.stage = 'BLOCKED'; out.note = 'Pas de trade le vendredi (filtre)'; return out; }
+    if (lp.minutes < oS) return out;
+    const cs = ((CANDLES[sym] || {})[5] || []);
+    if (cs.length < O.rsiLen + 2) { out.stage = 'NO_DATA'; out.note = `DATA_UNAVAILABLE : bougies M5 ${sym} insuffisantes (${cs.length})`; return out; }
+    const closed = cs.filter(x => x.t + 300000 <= ts), day = [];
+    for (let i = closed.length - 1; i >= 0 && closed.length - i <= 400; i--) {
+      const q = localParts(closed[i].t, O.tz);
+      if (q.date !== lp.date) { if (day.length) break; continue; }
+      day.unshift(Object.assign({}, closed[i], { min: q.minutes }));
+    }
+    const win = day.filter(x => x.min >= oS && x.min < oE);
+    if (lp.minutes < oE || !win.length) { out.stage = 'FORMING'; return out; }
+    const hi = Math.max(...win.map(x => x.h)), lo = Math.min(...win.map(x => x.l)), pips = (hi - lo) / OPR_PIP;
+    out.range = { hi, lo, pips: r2(pips), ok: pips >= O.minPips && pips <= O.maxPips };
+    if (!out.range.ok) { out.stage = 'RANGE_OUT'; out.note = `OPR hors limites (${r2(pips)} pips) : pas de trade aujourd'hui`; return out; }
+    if (lp.minutes >= rS) { out.stage = 'EXPIRED'; out.note = 'Fenêtre terminée'; return out; }
+    out.stage = 'WATCHING';
+    const x = day.filter(c => c.min >= oE).slice(-1)[0];
+    if (!x) return out;
+    const buy = x.c > hi, sell = x.c < lo;
+    out.candle = { t: x.t, o: x.o, h: x.h, l: x.l, c: x.c };
+    const rsi = oprRsiLast(closed.filter(c => c.t <= x.t).slice(-300).map(c => c.c), O.rsiLen);
+    const slD = buy ? x.c - x.l : sell ? x.h - x.c : (x.c >= x.o ? x.c - x.l : x.h - x.c), slPips = slD / OPR_PIP;
+    out.rows = [
+      { l: 'Heure', v: `${String(Math.floor(x.min / 60)).padStart(2, '0')}:${String(x.min % 60).padStart(2, '0')}`, ok: x.min >= gS && x.min < rS },
+      { l: 'OPR', v: `${r2(pips)} pips`, ok: out.range.ok },
+      { l: 'RSI', v: rsi == null ? 'N/A' : r2(rsi), ok: rsi == null ? null : (rsi >= O.rsiOS && rsi <= O.rsiOB) },
+      { l: 'SL', v: `${r2(slPips)} pips`, ok: slD > 0 && slPips <= O.slMaxPips }
+    ];
+    if (!(buy || sell)) { out.note = 'En attente d\'une clôture M5 au-delà du range'; return out; }
+    if (out.rows.every(r => r.ok === true)) out.signal = { dir: buy ? 'BUY' : 'SELL', rsi: r2(rsi), slPips: r2(slPips) };
+    else out.note = 'Cassure détectée mais tableau non vert : pas de trade';
+    return out;
+  }
+  async function oprScan(ts) {
+    const O = cfg().opr; if (!O.enabled || !O.autoTrade) return;
+    const st = (S.oprRun = S.oprRun || {}), r = oprCompute(ts);
+    if (st.date !== r.date) { st.date = r.date; st.done = false; st.tradeId = null; st.lastCandle = null; }
+    if (st.done || r.stage !== 'WATCHING' || !r.candle || st.lastCandle === r.candle.t) return;
+    st.lastCandle = r.candle.t; save();
+    if (!r.signal) { log('WAIT', `OPR ${r.symbol}: ${r.note || 'pas de signal'}`, { kind: 'opr' }); return; }
+    const price = await ensurePrice(r.symbol);
+    if (!price) { log('WAIT', 'OPR: DATA_UNAVAILABLE prix', { kind: 'opr' }); st.lastCandle = null; return; }
+    const buy = r.signal.dir === 'BUY', entry = price.mid, sl = buy ? r.candle.l : r.candle.h, d = Math.abs(entry - sl);
+    if (!(d > 0) || (buy ? sl >= entry : sl <= entry)) { log('WAIT', 'OPR: le prix a déjà dépassé le SL de la bougie de signal', { kind: 'opr' }); return; }
+    if (d / OPR_PIP > O.slMaxPips) { log('WAIT', `OPR: SL ${r2(d / OPR_PIP)} pips > ${O.slMaxPips}`, { kind: 'opr' }); return; }
+    const tp = entry + (buy ? 1 : -1) * O.rr * d;
+    const res = await submitSignal({ symbol: r.symbol, action: r.signal.dir, entry, sl, tp, tradingMode: 'OPR',
+      reason: `OPR ${r.signal.dir} · cassure du range ${r.range.lo}-${r.range.hi} (${r.range.pips} pips) · RSI ${r.signal.rsi} · SL ${r2(d / OPR_PIP)} pips · RR ${O.rr}` }, 'OPR');
+    if (res.ok) { st.done = true; st.tradeId = res.tradeId; st.dir = r.signal.dir; st.at = new Date(ts).toISOString(); save(); }
+  }
+  function oprView(ts) {
+    const O = cfg().opr, r = oprCompute(ts), st = S.oprRun || {};
+    const trades = S.trades.filter(t => t.mode === 'OPR').map(t => ({
+      id: t.id, ts: t.ts, symbol: t.symbol, action: t.action, entry: t.entry, sl: t.sl, tp: t.tp, lots: t.lots, riskMoney: t.riskMoney, status: t.status,
+      exit: t.exitPrice != null ? t.exitPrice : null, pnlMoney: t.result && t.result.pnlMoney != null ? t.result.pnlMoney : null,
+      pnlPoints: t.result && t.result.pnlPoints != null ? t.result.pnlPoints : null, outcome: t.result && t.result.outcome || null, note: t.execNote || null, reason: t.reason
+    }));
+    const closed = trades.filter(t => t.status === 'CLOSED'), month = localParts(ts, O.tz).date.slice(0, 7);
+    const sum = a => r2(a.reduce((x, t) => x + (t.pnlMoney || 0), 0)), wins = closed.filter(t => t.outcome === 'WIN').length, losses = closed.filter(t => t.outcome === 'LOSS').length;
+    const m = closed.filter(t => localParts(Date.parse(t.ts), O.tz).date.slice(0, 7) === month);
+    return {
+      ok: true, enabled: O.enabled, autoTrade: O.autoTrade, pauseMentor: O.pauseMentor, mentorPaused: oprWindow(ts), tz: O.tz, symbol: r.symbol,
+      config: { oprStart: O.oprStart, oprEnd: O.oprEnd, greenStart: O.greenStart, redStart: O.redStart, minPips: O.minPips, maxPips: O.maxPips, rsiLen: O.rsiLen, rsiOB: O.rsiOB, rsiOS: O.rsiOS, slMaxPips: O.slMaxPips, rr: O.rr, riskPct: O.riskPct, noFriday: O.noFriday },
+      stage: r.stage, note: r.note, range: r.range, candle: r.candle, rows: r.rows, signal: r.signal, today: { done: !!(st.date === r.date && st.done), tradeId: st.date === r.date ? st.tradeId || null : null },
+      trades: trades.slice(-30).reverse(),
+      stats: { total: closed.length, wins, losses, winRate: closed.length ? Math.round(wins / closed.length * 100) : null, pnlMoney: sum(closed), monthPnl: sum(m), monthTrades: m.length, open: trades.filter(t => ACTIVE.includes(t.status)).length }
+    };
+  }
+
   // ---------- tick (1/s) ----------
   async function tick(ts = clock()) {
     rollDay(ts);
@@ -779,6 +919,7 @@ function createEngine(opts = {}) {
       else if (t.status === 'SENT' && ts - t.sentTs > c.signalTTLSec * 1000) { t.status = 'UNCONFIRMED'; t.execNote = 'aucune confirmation cTrader'; log('UNCONFIRMED', 'Aucune confirmation cTrader pour ' + t.id + ' : vérifier le compte puis clore manuellement', { kind: 'unc' }, true); }
     }
     if (c.autoTrade) { try { await autoScan(ts); } catch (e) { console.error('[mentor] auto:', e && e.message); } }
+    if (c.opr && c.opr.enabled && c.opr.autoTrade) { try { await oprScan(ts); } catch (e) { console.error('[opr] scan:', e && e.message); } }
     if (c.news.enabled) {
       for (const ev of S.news.filter(relevant)) {
         if (!ev.analysis && ts >= ev.t - c.news.analysisBeforeMin * 60000 && ts < ev.t) {
@@ -791,6 +932,10 @@ function createEngine(opts = {}) {
         }
         if (!ev.executed && ev.analysis && ts >= ev.t - (c.news.executeBeforeSec + 15) * 1000 && ts < ev.t - c.news.executeBeforeSec * 1000) await ensurePrice();   // pré-chauffe du prix
         if (!ev.executed && ts >= ev.t - c.news.executeBeforeSec * 1000) {
+          // Une seule entrée par publication : « Core CPI m/m + CPI m/m + CPI y/y » ou « NFP + chômage + salaires » = UN trade (l'indicateur le plus lourd).
+          const grp = S.news.filter(x => relevant(x) && x.t === ev.t), wOf = x => (x.analysis && x.analysis.indicator && x.analysis.indicator.weight) || 0;
+          const primary = grp.reduce((a, x) => (wOf(x) > wOf(a) ? x : a), grp[0]);
+          if (primary && primary.id !== ev.id) { ev.executed = { status: 'GROUPED', primary: primary.id, reason: 'même publication que ' + primary.title }; save(); continue; }
           if (ts >= ev.t - 5000) { ev.executed = { status: 'MISSED', reason: 'fenêtre T-1min dépassée' }; log('NO TRADE', `${ev.title}: fenêtre T-1min manquée`, { kind: 'news' }, true); save(); continue; }
           const a = ev.analysis;
           if (!a) ev.executed = { status: 'NO_TRADE', reason: 'pas d\'analyse fondamentale' };
@@ -934,7 +1079,7 @@ function createEngine(opts = {}) {
   return {
     tick, submitSignal, status, risk: riskView, setConfig, setActive, setBlock, setNews, newsFeedHeartbeat, setTradingMode, setCombined, setAutoTrade, emergencyStop,
     execNext, execAck, execFail, execResult, manualClose, updateAccount, setCandles, setExecStatus,
-    getConfig: () => clone(S.config), news: () => newsView(clock()), newsEvents: () => S.news.map(e => ({ id: e.id, title: e.title, time: e.time, impact: e.impact, currency: e.currency, category: e.category, forecast: e.forecast, previous: e.previous, actual: e.actual, analysis: e.analysis, executed: e.executed })),
+    opr: () => oprView(clock()), getConfig: () => clone(S.config), news: () => newsView(clock()), newsEvents: () => S.news.map(e => ({ id: e.id, title: e.title, time: e.time, impact: e.impact, currency: e.currency, category: e.category, forecast: e.forecast, previous: e.previous, actual: e.actual, analysis: e.analysis, executed: e.executed, trades: newsTrades(e).trades, result: newsTrades(e).result })),
     propStatus: () => { rollDay(clock()); return propStatus(); }, logs: (n = 100) => logs.slice(-n), trades: (n = 50) => S.trades.slice(-n), journal,
     activeTrades: () => activeTrades().map(t => Object.assign({}, t)), sessionCloseDue, userId,
     _analyze: analyze, _runAnalysis: runAnalysis, _internals: { S: () => S, CANDLES }
