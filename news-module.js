@@ -155,6 +155,49 @@
     if (html !== state.lastLive) { state.lastLive = html; host.innerHTML = html; }
   }
 
+  /* ---------- Analyse Claude (serveur) ---------- */
+  var aiBusy = false;
+  function drawAi(r) {
+    var box = $('aiBox'); if (!box) return;
+    var head = '<div class="card"><div class="card-title"><span>🤖 ANALYSE IA (gratuite) · XAU/USD & EUR/USD</span></div>';
+    var btn = '<button type="button" id="aiRun" class="month-tab active">' + (aiBusy ? 'Analyse en cours…' : 'Analyser maintenant') + '</button>';
+    if (!r || !r.ok) { box.innerHTML = head + '<div class="n-meta">' + esc(r && r.error ? r.error : 'Aucune analyse pour le moment.') + '</div>' + btn + '</div>'; return; }
+    var a = r.analysis, col = function (b) { return b === 'BULLISH' ? '#00e676' : b === 'BEARISH' ? '#ff3d71' : '#8292aa'; };
+    var pill = function (n, x) { return '<span style="margin-right:12px"><b>' + n + '</b> <b style="color:' + col(x.bias) + '">' + x.bias + ' ' + x.confidence + '%</b></span>'; };
+    box.innerHTML = head + '<div style="font-size:16px">' + pill('XAU/USD', a.xauusd) + pill('EUR/USD', a.eurusd) + '</div>' +
+      '<div class="n-meta">' + esc(a.summary) + '</div>' +
+      a.key_events.map(function (k) { return '<div class="scn-row"><span>' + esc(k.title) + '</span><span class="n-meta">' + esc(k.reason) + '</span></div>'; }).join('') +
+      (a.risks.length ? '<div class="ai-note">Risques : ' + a.risks.map(esc).join(' · ') + '</div>' : '') +
+      '<div class="ai-note">IA ' + esc(r.provider) + ' (' + esc(r.model) + ') · ' + r.events + ' événements réels · ' + esc(String(r.at).slice(11, 16)) + ' UTC · consultatif, aucun ordre automatique.</div>' + btn + '</div>';
+  }
+  function loadAi(force) {
+    if (!window.__aresApi) return;
+    aiBusy = !!force; if (force) drawAi(null);
+    (force ? window.__aresApi('/api/mentor/ai/analysis', 'POST', { force: true }) : window.__aresApi('/api/mentor/ai/analysis'))
+      .then(function (r) { aiBusy = false; drawAi(r); }).catch(function (e) { aiBusy = false; drawAi({ ok: false, error: e && e.message }); });
+  }
+  document.addEventListener('click', function (e) { if (e.target && e.target.id === 'aiRun' && !aiBusy) loadAi(true); }, false);
+  setTimeout(function () { loadAi(false); }, 2500);
+
+  /* ---------- analyse fondamentale : biais XAU/USD (données réelles uniquement) ---------- */
+  function drawFund() {
+    var box = $('fundBox'); if (!box) return;
+    var ev = (state.mentor && state.mentor.events) || [], now = Date.now(), sc = 0, rows = [];
+    ev.forEach(function (e) {
+      var a = e.analysis; if (!a || (a.bias !== 'BUY' && a.bias !== 'SELL')) return;
+      if (String(e.impact).toLowerCase() !== 'high') return;
+      var t = Number(e.time) || Date.parse(e.time); if (isFinite(t) && now - t > 7 * 864e5) return;
+      var w = (a.confidence || 0) / 100; sc += a.bias === 'BUY' ? w : -w;
+      rows.push('<div class="scn-row"><span>' + esc(e.title) + '</span><b style="color:' + (a.bias === 'BUY' ? '#00e676' : '#ff3d71') + '">' + (a.bias === 'BUY' ? '▲ Gold' : '▼ Gold') + ' ' + (a.confidence || 0) + '%</b></div>');
+    });
+    var b = !rows.length ? 'NEUTRE' : sc > 0.15 ? 'HAUSSIER' : sc < -0.15 ? 'BAISSIER' : 'NEUTRE';
+    var col = b === 'HAUSSIER' ? '#00e676' : b === 'BAISSIER' ? '#ff3d71' : '#8292aa';
+    box.innerHTML = '<div class="card"><div class="card-title"><span>🧭 ANALYSE FONDAMENTALE · BIAIS XAU/USD</span></div>' +
+      '<div style="font-size:22px;font-weight:800;color:' + col + '">' + b + '</div>' +
+      '<div class="n-meta">' + (rows.length ? 'Score ' + sc.toFixed(2) + ' sur ' + rows.length + ' événement(s) USD à fort impact (prévision vs précédent)' : 'Aucune donnée exploitable (prévision + précédent + catégorie requis) : pas de biais') + '</div>' +
+      rows.join('') + '<div class="ai-note">USD plus fort = Gold plus faible. Biais indicatif issu des valeurs du calendrier, pas une promesse.</div></div>';
+  }
+
   /* ---------- liste du calendrier ---------- */
   function drawList() {
     var wrap = $('newsListWrap');
@@ -243,7 +286,7 @@
       api('/api/mentor/news').then(function (j) { state.mentor = j; })
     ]).then(function () { state.error = ''; })
       .catch(fail)
-      .then(function () { drawStatus(); drawList(); drawLive(); });
+      .then(function () { drawStatus(); drawList(); drawLive(); drawFund(); });
   }
 
   function tick() { if (visible()) refresh(); }
@@ -271,7 +314,7 @@
   });
 
   setInterval(tick, 5000);
-  setTimeout(function () { drawStatus(); drawList(); tick(); }, 1500);
+  setTimeout(function () { drawStatus(); drawList(); drawFund(); tick(); }, 1500);
   // Le garde-fou Auto Trade a besoin de l'état de pause même quand l'onglet NEWS est fermé.
   setInterval(function () {
     if (!visible()) api('/api/mentor/news').then(function (j) { state.mentor = j; state.error = ''; }).catch(function () {});
