@@ -14,6 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const { createManager } = require('./ctrader/manager');
 const { USER_RE } = require('./ctrader/token-store');
+const newsCore = require('./news-core');       // NEWS USA importantes seulement
 const fundamental = require('./fundamental');   // analyse fondamentale USD de l'IA Mentor (remplace l'ancienne IA Gemini)
 if (process.env.CTRADER_DIAG === '1') { try { require('./ctrader/diag').run(); } catch (e) { console.log('[ctrader-diag] erreur', e && e.message); } }
 
@@ -108,11 +109,17 @@ module.exports = function createMentor(express, opts = {}) {
     });
     sub('risk', (o, d) => { num(o, d, 'maxConsecutiveLosses', 0, 50); num(o, d, 'maxDrawdownPct', 0, G.maxDrawdownPct); num(o, d, 'maxSlippagePts', 0, 100); num(o, d, 'maxOpenPositions', 1, 20); if (o.maxDailyLossMoney === null) d.maxDailyLossMoney = null; else num(o, d, 'maxDailyLossMoney', 0, 1e7); bool(o, d, 'closeOnSlippage'); });
     sub('analysis', (o, d) => {
-      num(o, d, 'minScore', 0, 20); num(o, d, 'minComponents', 1, 7);
+      num(o, d, 'minScore', 0, 20); num(o, d, 'minComponents', 1, 7); num(o, d, 'minConfidencePct', 0, 100);
       if (o.weights && typeof o.weights === 'object') { d.weights = {}; for (const k of ['structure', 'mtf', 'trigger', 'sweep', 'zone', 'premiumDiscount', 'orderFlow']) num(o.weights, d.weights, k, 0, 10); }
       if (o.orderFlow && typeof o.orderFlow === 'object') { d.orderFlow = {}; bool(o.orderFlow, d.orderFlow, 'enabled'); bool(o.orderFlow, d.orderFlow, 'requireWhenEnabled'); }
     });
-    sub('news', (o, d) => { bool(o, d, 'enabled'); bool(o, d, 'autoTrade'); bool(o, d, 'requireData'); });
+    sub('news', (o, d) => { bool(o, d, 'enabled'); bool(o, d, 'autoTrade'); bool(o, d, 'requireData'); bool(o, d, 'coreOnly'); num(o, d, 'minConfidence', 50, 95); });
+    sub('opr', (o, d) => {
+      bool(o, d, 'enabled'); bool(o, d, 'autoTrade'); bool(o, d, 'pauseMentor'); bool(o, d, 'noFriday');
+      for (const k of ['oprStart', 'oprEnd', 'greenStart', 'redStart']) if (HHMM.test(String(o[k]))) d[k] = o[k];
+      num(o, d, 'minPips', 1, 100000); num(o, d, 'maxPips', 1, 100000); num(o, d, 'rsiLen', 2, 50); num(o, d, 'rsiOB', 50, 100); num(o, d, 'rsiOS', 0, 50);
+      num(o, d, 'slMaxPips', 10, 100000); num(o, d, 'rr', 0.5, 10); num(o, d, 'riskPct', 0.05, G.maxRiskPct);
+    });
     sub('session', (o, d) => { bool(o, d, 'enabled'); for (const k of ['startUTC', 'noEntryAfterUTC', 'closeAllUTC']) if (HHMM.test(String(o[k]))) d[k] = o[k]; });
     sub('micro', (o, d) => { bool(o, d, 'enabled'); num(o, d, 'maxRiskPct', 1, 50); });
     return out;
@@ -141,13 +148,22 @@ module.exports = function createMentor(express, opts = {}) {
     const st = news.status();
     const days = clamp(Number(req.query.days) || 7, 1, 14);
     const now = Date.now(), cur = String(req.query.currency || 'USD').slice(0, 3).toUpperCase();
-    const raw = news.calendar({ now, currency: cur, impacts: String(req.query.impact || 'high,medium').slice(0, 40), days, pastHours: clamp(Number(req.query.past) || 12, 0, 168) });
+    const raw0 = news.calendar({ now, currency: cur, impacts: String(req.query.impact || 'high,medium').slice(0, 40), days, pastHours: clamp(Number(req.query.past) || 12, 0, 168) });
+    // Panneau NEWS : seulement les news USA vraiment importantes (NFP, CPI, PCE, FOMC...). ?all=1 pour tout voir.
+    const raw = cur === 'USD' && req.query.all !== '1' ? raw0.filter(e => newsCore.isCore(e.title)) : raw0;
     // Analyse fondamentale réelle (USD uniquement) : biais BUY/SELL par paire, jamais NEUTRAL ; contexte = publications des 7 derniers jours.
     const ctx = news.calendar({ now, currency: 'USD', impacts: 'high,medium', days: 1, pastHours: 168 });
-    const events = cur === 'USD' ? fundamental.analyzeCalendar(raw, { now, context: ctx }) : raw;
+    let events = cur === 'USD' ? fundamental.analyzeCalendar(raw, { now, context: ctx }) : raw;
+    // Résultat réel du robot : exécution, TP/SL, P/L (même id que le moteur : devise-heure-titre)
+    const eng = E(req).newsEvents(), byId = new Map(eng.map(x => [x.id, x]));
+    events = events.map(e => {
+      const x = byId.get(e.id) || eng.find(y => Date.parse(y.time) === Date.parse(e.time) && y.title === e.title);
+      return x ? Object.assign({}, e, { key: newsCore.coreKey(e.title), execution: x.executed || null, trades: x.trades || [], result: x.result || null }) : Object.assign({}, e, { key: newsCore.coreKey(e.title) });
+    });
     return { ok: true, state: st.state, available: st.available, source: news.name(), fetchedAt: st.fetchedAt ? new Date(st.fetchedAt).toISOString() : null, error: st.available ? null : st.error, count: events.length, events };
   }));
   router.get('/api/prop/status', readLimit, auth, safe(req => Object.assign({ ok: true }, E(req).propStatus())));
+  router.get('/api/mentor/opr', readLimit, auth, safe(req => E(req).opr()));
   router.get('/api/mentor/log', readLimit, auth, safe(req => ({ ok: true, logs: E(req).logs(Math.min(+req.query.n || 100, 500)) })));
   router.get('/api/mentor/config', readLimit, auth, safe(req => ({ ok: true, config: E(req).getConfig(), limits: admin.limits })));
 
