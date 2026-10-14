@@ -13,13 +13,12 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { createManager } = require('./ctrader/manager');
-const { OrderFlowHub } = require('./providers/providers');
 const { USER_RE } = require('./ctrader/token-store');
 if (process.env.CTRADER_DIAG === '1') { try { require('./ctrader/diag').run(); } catch (e) { console.log('[ctrader-diag] erreur', e && e.message); } }
 
 module.exports = function createMentor(express, opts = {}) {
   const dataRoot = opts.dataRoot || process.env.DATA_DIR || path.join(process.cwd(), 'data');
-  const orderFlow = opts.orderFlow || new OrderFlowHub({ maxAgeSec: Number(process.env.ORDERFLOW_MAX_AGE_SEC) || 30 });
+  const orderFlow = null;   // Order Flow / Bookmap / Exocharts supprimés
   const manager = opts.manager || createManager({ dataRoot, orderFlow, WebSocketImpl: opts.WebSocketImpl });
   const news = opts.news || null;   // NewsProvider : calendrier économique réel (ou null)
   const router = express.Router();
@@ -199,13 +198,6 @@ module.exports = function createMentor(express, opts = {}) {
   router.post('/api/ctrader/disconnect', writeLimit, auth, json, safe(req => manager.disconnect(req.user.userId)));
 
   // ---------- Order Flow (source externe réelle) ----------
-  router.post('/api/orderflow/push', limiter(600), json, (req, res) => {
-    const expected = process.env.ORDERFLOW_PUSH_KEY;
-    if (!expected) return res.status(503).json({ ok: false, error: 'ORDERFLOW_PUSH_KEY non configurée' });
-    if (!eq(keyOf(req), expected)) return res.status(401).json({ ok: false, error: 'clé invalide' });
-    try { res.json(orderFlow.push(req.body || {})); } catch (e) { reject(res, String(e.message)); }
-  });
-  router.get('/api/orderflow/status', readLimit, auth, safe(() => Object.assign({ ok: true }, orderFlow.status())));
 
   // ---------- Mode de trading (SCALPING / SWING) — persistant côté serveur (état du moteur de l'utilisateur) ----------
   const modeView = e => { const s = e.status(); return { ok: true, tradingMode: s.tradingMode, timeframes: s.timeframes, persisted: true }; };
@@ -215,20 +207,10 @@ module.exports = function createMentor(express, opts = {}) {
     return r.ok ? modeView(E(req)) : r;
   }));
 
-  // ---------- Bookmap / Exocharts : données RÉELLES uniquement (jamais de simulation) ----------
-  for (const id of ['bookmap', 'exocharts']) {
-    router.get('/api/' + id + '/status', readLimit, auth, safe(() => Object.assign({ ok: true }, orderFlow.source(id).status())));
-    router.get('/api/' + id + '/data', readLimit, auth, safe(req => {
-      const sym = String(req.query.symbol || E(req).getConfig().symbol || 'XAUUSD').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 12);
-      const src = orderFlow.source(id), st = src.status(), d = src.get(sym);
-      const available = d.status === 'AVAILABLE' || d.status === 'STALE';
-      const data = available ? Object.fromEntries(Object.entries(d).filter(([k]) => !['status', 'source', 'ts', 'ageSec'].includes(k))) : null;
-      return { ok: true, source: id, symbol: sym, connection: st.connection, status: d.status, data, ts: d.ts ? new Date(d.ts).toISOString() : null, ageSec: d.ageSec != null ? d.ageSec : null,
-        message: available ? (d.status === 'STALE' ? 'DATA STALE : donnée trop ancienne, ignorée par l\'IA' : 'Données réelles') : `${src.label} : NOT CONNECTED · DATA UNAVAILABLE. Connect a supported ${src.label} data source.` };
-    }));
-  }
 
   // ---------- News partagées (écriture réservée à l'administrateur) ----------
+  router.get('/api/mentor/ai/analysis', readLimit, auth, safe(() => require('./ai-analyst').cached()));
+  router.post('/api/mentor/ai/analysis', writeLimit, auth, json, safe(req => require('./ai-analyst').run(!!(req.body && req.body.force))));
   router.post('/api/mentor/news/events', writeLimit, adminOnly, json, safe(req => { const ev = Array.isArray(req.body) ? req.body : (req.body && req.body.events) || []; manager.broadcastNews(ev.slice(0, 200)); return { ok: true, count: ev.length }; }));
 
   // ---------- Admin ----------
@@ -273,7 +255,7 @@ module.exports = function createMentor(express, opts = {}) {
       const first = setTimeout(pumpNews, 4000); if (first.unref) first.unref();
       newsTimer = setInterval(pumpNews, 15000); if (newsTimer.unref) newsTimer.unref();
     }
-    if (orderFlow.start) orderFlow.start();   // interroge les sources HTTP configurées (BOOKMAP_API_URL / EXOCHARTS_API_URL)
+    if (orderFlow && orderFlow.start) orderFlow.start();   // interroge les sources HTTP configurées (BOOKMAP_API_URL / EXOCHARTS_API_URL)
     manager.startAll().catch(e => console.error('[ctrader] startAll:', manager.oauth.redact(e && e.message)));
     timer = setInterval(async () => {
       if (busy) return; busy = true;
@@ -287,7 +269,7 @@ module.exports = function createMentor(express, opts = {}) {
     if (timer) clearInterval(timer); timer = null;
     if (newsTimer) clearInterval(newsTimer); newsTimer = null;
     if (news && typeof news.stop === 'function') news.stop();
-    if (orderFlow.stop) orderFlow.stop();
+    if (orderFlow && orderFlow.stop) orderFlow.stop();
   }
 
   return { router, manager, engine: manager.engine(OWNER), orderFlow, news, pumpNews, start, stop, _admin: () => admin };
