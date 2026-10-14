@@ -794,6 +794,46 @@ td,th{padding:8px 6px;border-bottom:1px solid var(--line)}
 #panelNews .disclaimer{margin-top:12px!important;line-height:1.5}
 #newsDetailCard .scn-row{padding:9px 0!important}
 </style>
+<style>/* Objectif : mêmes styles que le hub */
+#objHub{margin:0 0 14px;border:1px solid rgba(0,212,255,.35);border-radius:16px;background:var(--panel);padding:12px;box-sizing:border-box;max-width:100%}
+#objHub *{box-sizing:border-box}
+#objHub .ah-brand{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+#objHub .ah-brand b{font-size:15px;font-weight:800;letter-spacing:.08em}
+#objHub .ah-nav{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;margin-bottom:12px}
+#objHub .ah-nav button{min-height:46px;padding:6px 2px;border-radius:12px;border:1px solid var(--line);background:var(--panel-2);color:var(--muted);font:700 11px/1.15 inherit;font-family:inherit;cursor:pointer;letter-spacing:.02em}
+#objHub .ah-nav button.on{background:linear-gradient(135deg,#00d4ff,#0066ff);color:#fff;border-color:transparent}
+#objHub .ah-nav button small{display:block;font-size:9px;font-weight:600;opacity:.85;margin-top:2px}
+#objHub .ah-pill{display:inline-block;font-size:11px;font-weight:700;padding:4px 10px;border-radius:999px;border:1px solid currentColor;white-space:nowrap}
+#objHub .ok{color:var(--bull)}#objHub .no{color:var(--bear)}#objHub .wn{color:var(--warn)}#objHub .mu{color:var(--muted)}
+#objHub .ah-tiles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:10px 0}
+@media(min-width:720px){#objHub .ah-tiles{grid-template-columns:repeat(4,minmax(0,1fr))}}
+#objHub .ah-tile{background:var(--panel-2);border:1px solid var(--line);border-radius:12px;padding:12px 6px;text-align:center;min-width:0}
+#objHub .ah-tile b{display:block;font-family:'JetBrains Mono',monospace;font-size:clamp(15px,4.4vw,22px);font-weight:700;line-height:1.2;overflow-wrap:anywhere}
+#objHub .ah-tile span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+#objHub .ah-box{background:var(--panel-2);border:1px solid var(--line);border-radius:12px;padding:12px;margin:10px 0;font-size:13px;line-height:1.55;overflow-wrap:anywhere}
+#objHub .ah-h{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin:14px 0 6px}
+#objHub .ah-row{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
+#objHub .ah-btn{flex:1 1 140px;min-height:46px;padding:10px 12px;border-radius:12px;border:1px solid var(--cyan);background:transparent;color:var(--cyan);font-weight:800;font-family:inherit;font-size:13px;cursor:pointer}
+#objHub .ah-btn.pri{background:linear-gradient(135deg,#00d4ff,#0066ff);color:#fff;border-color:transparent}
+#objHub .ah-btn.dng{border-color:var(--bear);color:var(--bear)}
+#objHub .ah-btn.dng.fill{background:var(--bear);color:#fff}
+#objHub .ah-btn.on{background:var(--bull);color:#06210f;border-color:transparent}
+#objHub .ah-btn:disabled{opacity:.5;cursor:default}
+#objHub .ah-sc{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%}
+#objHub table{width:100%;font-size:12px;border-collapse:collapse}
+#objHub th{font-size:10px;padding:7px 6px;text-align:left;color:var(--muted);text-transform:uppercase;white-space:nowrap}
+#objHub td{padding:8px 6px;border-top:1px solid var(--line);font-family:'JetBrains Mono',monospace;white-space:nowrap}
+#objHub .ah-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+#objHub .ah-form label{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--muted)}
+#objHub .ah-form input[type=number],#objHub .ah-form select{width:100%;min-height:42px;padding:8px;border-radius:10px;border:1px solid var(--line);background:var(--panel);color:var(--text);font-size:15px;font-family:inherit}
+#objHub .ah-chk{display:flex;align-items:center;gap:8px;min-height:40px;font-size:13px;color:var(--text)}
+#objHub .ah-chk input{width:20px;height:20px}
+#objHub .ah-syms{display:flex;flex-wrap:wrap;gap:8px}
+#objHub .ah-syms label{flex-direction:row;align-items:center;gap:6px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;color:var(--text);font-size:12px}
+#objHub .ah-na{padding:18px 12px;text-align:center;border:1px dashed var(--line);border-radius:12px;color:var(--muted);line-height:1.7}
+#objHub .ah-na b{display:block;color:var(--warn);font-size:15px;letter-spacing:.06em;margin-bottom:4px}
+#objHub .ah-v{font-size:9px;color:var(--muted);text-align:right;margin-top:8px}
+</style>
 </head>
 <body>
 
@@ -856,6 +896,7 @@ td,th{padding:8px 6px;border-bottom:1px solid var(--line)}
   <button type="button" data-t="tabPanelOpr" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></svg><span>OPR</span></button>
   <button type="button" data-t="tabPanelNews" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h11a1 1 0 011 1v12a1 1 0 001 1H7a2 2 0 01-2-2z"/><path d="M17 9h2a1 1 0 011 1v7a2 2 0 01-2 2M8 9h5M8 12h5M8 15h3"/></svg><span>News</span></button>
   <button type="button" data-t="tabPanelAccount" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4v5M15 4v5M7 9h10v4a5 5 0 01-10 0zM12 18v3"/></svg><span>Compte</span></button>
+  <button type="button" data-t="tabPanelObjective" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4v3M12 17v3M4 12h3M17 12h3"/><circle cx="12" cy="12" r="2"/></svg><span>Objectif</span></button>
 </aside>
 
 
@@ -884,8 +925,30 @@ td,th{padding:8px 6px;border-bottom:1px solid var(--line)}
     <button class="month-tab" id="tabPanelRobot" style="flex:1">🤖 ROBOT</button>
     <button class="month-tab" id="tabPanelNews" style="flex:1">📰 NEWS</button>
     <button class="month-tab" id="tabPanelAccount" style="flex:1">🔌 COMPTE</button>
+    <button class="month-tab" id="tabPanelObjective" style="flex:1">🎯 OBJECTIF</button>
   </div>
   
+
+  <div id="panelObjective" style="display:none">
+  <section id="objHub" aria-label="Objectif">
+    <div class="ah-brand"><b>🎯 OBJECTIF · RISQUE</b><span id="objTop" class="ah-pill mu">…</span></div>
+    <div id="objTiles" class="ah-tiles"></div>
+    <div class="ah-h">Paramètres (séparés du Mentor)</div>
+    <div class="ah-box">
+      <div class="ah-form">
+        <label>Objectif / jour (pts)<input type="number" id="objPts" min="1" step="1"></label>
+        <label>Limite de perte / jour (pts)<input type="number" id="objLoss" min="1" step="1"></label>
+        <label>Risque / trade (%)<input type="number" id="objRisk" min="0.05" step="0.05"></label>
+        <label>Max trades / jour (0 = illimité)<input type="number" id="objMax" min="0" step="1"></label>
+        <label>Cible profit protégé (pts)<input type="number" id="objTarget" min="1" step="1"></label>
+      </div>
+      <label class="ah-chk"><input type="checkbox" id="objPP">Profit Protection ON</label>
+      <div class="ah-row"><button type="button" class="ah-btn pri" id="objSave">💾 Enregistrer</button></div>
+      <div id="objMsg" class="mu" style="margin-top:8px"></div>
+    </div>
+    <div class="ah-v">Ces réglages sont indépendants du panel Mentor.</div>
+  </section>
+  </div>
 
   <div id="panelGold">
   <section id="aresHub" aria-label="ARES AI">
@@ -893,8 +956,6 @@ td,th{padding:8px 6px;border-bottom:1px solid var(--line)}
     <nav class="ah-nav" id="ahNav">
       <button type="button" data-v="SCALPING">⚡ SCALPING<small>M1·M5·M15</small></button>
       <button type="button" data-v="SWING">📈 SWING<small>M15·M30</small></button>
-      <button type="button" data-v="BOOKMAP">BOOKMAP<small>—</small></button>
-      <button type="button" data-v="EXOCHARTS">EXOCHARTS<small>—</small></button>
       <button type="button" data-v="CTRADER">cTRADER<small>—</small></button>
     </nav>
     <div id="ahBody"><div class="ah-box mu">Chargement…</div></div>
@@ -1137,6 +1198,8 @@ td,th{padding:8px 6px;border-bottom:1px solid var(--line)}
       #panelNews .scn-row{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid rgba(130,146,170,.10);font-size:12px}
       #panelNews .scn-row b{font-family:'JetBrains Mono',monospace}
     </style>
+    <div id="aiBox"></div>
+    <div id="fundBox"></div>
     <div id="mentorNewsBox"></div>
 
     <div class="card">
@@ -4836,12 +4899,9 @@ function vMode(){
   var C=(cfg&&cfg.config)||null;
   if(C){var allowed=C.symbolsAllowed||[],all=Object.keys(C.symbols||{});
     h+='<div class="ah-h">Réglages</div><div class="ah-box"><div class="ah-syms">'+all.map(function(s){return '<label class="ah-chk"><input type="checkbox" data-sym="'+esc(s)+'"'+(allowed.indexOf(s)>=0?' checked':'')+'>'+esc(s)+'</label>'}).join('')+'</div>'
-     +'<div class="ah-form" style="margin-top:10px"><label>Risque / trade (%)<input type="number" id="ahRisk" step="0.05" min="0.05" value="'+esc(C.riskPerTradePct)+'"></label>'
-     +'<label>Cible profit protégé<input type="number" id="ahTarget" step="1" min="1" value="'+esc(C.profitProtection&&C.profitProtection.target!=null?C.profitProtection.target:C.normal.objectivePoints)+'"></label>'
-     +'<label>Max trades / jour (0 = illimité)<input type="number" id="ahMaxT" step="1" min="0" value="'+esc(C.normal.maxTrades)+'"></label></div>'
-     +'<label class="ah-chk"><input type="checkbox" id="ahPP"'+(C.profitProtection&&C.profitProtection.enabled?' checked':'')+'>Profit Protection ON</label>'
+     +'<div class="mu" style="margin-top:8px">Objectif, risque et Profit Protection : voir l\'onglet <b>OBJECTIF</b>.</div>'
      +'<label class="ah-chk"><input type="checkbox" id="ahNews"'+(C.news&&C.news.enabled?' checked':'')+'>News Filter ON</label>'
-     +'<label class="ah-chk"><input type="checkbox" id="ahOF"'+(C.analysis&&C.analysis.orderFlow&&C.analysis.orderFlow.enabled?' checked':'')+'>Order Flow Filter ON (seulement si Bookmap/Exocharts réellement connectés)</label>'
+     +'<label class="ah-chk"><input type="checkbox" id="ahOF"'+(C.analysis&&C.analysis.orderFlow&&C.analysis.orderFlow.enabled?' checked':'')+'>Order Flow (Bookmap/Exocharts) : confirmation bonus, ne bloque jamais</label>'
      +'<div class="ah-row"><button class="ah-btn pri" data-a="save">💾 Enregistrer</button></div></div>'}
   var rows=journal.slice(-15).reverse().map(function(t){return {Date:(t.dateTime||'').slice(5,16).replace('T',' '),Symbole:t.symbol,Sens:t.direction,Mode:t.mode,Lots:t.lots,Entry:t.entry,Exit:t.exit,'P/L $':t.pnlMoney,Statut:t.executionStatus}});
   h+='<div class="ah-h">Journal ('+journal.length+')</div>'+table(rows,9);
@@ -4872,7 +4932,7 @@ function vCt(){
   if(adm)h+=vAdmin();
   return h}
 function vAdmin(){
-  var h='<div class="ah-h">Admin Panel</div><div class="ah-box">API: '+pill('OK','ok')+' · utilisateurs '+adm.users.length+' · Order Flow '+esc(adm.orderFlow&&adm.orderFlow.status)+' · limites : risque max '+esc(adm.limits.maxRiskPct)+'% · live '+(adm.limits.liveAllowed?'autorisé':'interdit')+'</div>';
+  var h='<div class="ah-h">Admin Panel</div><div class="ah-box">API: '+pill('OK','ok')+' · utilisateurs '+adm.users.length+' · limites : risque max '+esc(adm.limits.maxRiskPct)+'% · live '+(adm.limits.liveAllowed?'autorisé':'interdit')+'</div>';
   h+='<div class="ah-sc"><table><tr><th>User</th><th>cTrader</th><th>Mode</th><th>Auto</th><th>Pos.</th><th>P/L $</th><th>Erreurs</th><th></th></tr>'+adm.users.map(function(u){return '<tr><td>'+esc(u.userId)+(u.suspended?' '+pill('SUSPENDU','no'):'')+'</td><td>'+esc(u.cTrader&&u.cTrader.status)+'</td><td>'+esc(u.tradingMode)+'</td><td>'+(u.autoTrade?'ON':'OFF')+'</td><td>'+esc(u.openPositions)+'</td><td>'+esc(u.dailyPL&&u.dailyPL.money)+'</td><td>'+esc((u.errors||[]).map(function(e){return e.reason}).join(' | ').slice(0,60))+'</td><td><button class="ah-btn" style="min-height:34px;flex:none" data-a="adoff" data-id="'+esc(u.userId)+'">Auto OFF</button> <button class="ah-btn dng" style="min-height:34px;flex:none" data-a="'+(u.suspended?'adun':'adsus')+'" data-id="'+esc(u.userId)+'">'+(u.suspended?'Réactiver':'Suspendre')+'</button></td></tr>'}).join('')+'</table></div>';
   h+='<div class="ah-row"><button class="ah-btn dng fill" data-a="adstop">🛑 EMERGENCY STOP GLOBAL</button></div>';
   return h}
@@ -4900,12 +4960,8 @@ function poll(){
   if(!key()){err='key';render();return}
   api('/api/mentor/status').then(function(j){st=j;err='';
     if(VIEW==='MODE'){api('/api/mentor/config').then(function(c){cfg=c;render()}).catch(function(){});api('/api/mentor/journal?n=40').then(function(j2){journal=j2.journal||[];render()}).catch(function(){})}
-    if(VIEW==='BOOKMAP'){api('/api/bookmap/status').then(function(s){bmS=s;render()}).catch(function(){});api('/api/bookmap/data?symbol='+encodeURIComponent(sym)).then(function(d){bmD=d;render()}).catch(function(){})}
-    if(VIEW==='EXOCHARTS'){api('/api/exocharts/status').then(function(s){exS=s;render()}).catch(function(){});api('/api/exocharts/data?symbol='+encodeURIComponent(sym)).then(function(d){exD=d;render()}).catch(function(){})}
     if(VIEW==='CTRADER'){api('/api/ctrader/status').then(function(s){ctS=s;render()}).catch(function(){});api('/api/mentor/trades?n=80').then(function(t){trades=t.trades||[];render()}).catch(function(){});
       if(Date.now()-lastAdm>20000){lastAdm=Date.now();api('/api/admin/overview').then(function(o){adm=o;render()}).catch(function(){adm=null})}}
-    if(!bmS)api('/api/bookmap/status').then(function(s){bmS=s;render()}).catch(function(){});
-    if(!exS)api('/api/exocharts/status').then(function(s){exS=s;render()}).catch(function(){});
     render()}).catch(function(e){err=e.message==='key'?'key':'net';if(e.message==='key'){try{localStorage.removeItem(KN)}catch(x){}}render()})}
 function act(p,m,b,after){return api(p,m,b).then(function(r){msg='';if(after)after(r);poll();return r}).catch(function(e){msg='Échec : '+e.message;busyUntil=0;render()})}
 function setView(v){
@@ -4927,9 +4983,7 @@ function onClick(e){
   if(a==='save'){
     var syms=[].slice.call(document.querySelectorAll('#ahBody [data-sym]')).filter(function(x){return x.checked}).map(function(x){return x.getAttribute('data-sym')});
     if(!syms.length){msg='Choisis au moins un symbole.';return render()}
-    var tg=parseFloat($('ahTarget').value);
-    var body={symbolsAllowed:syms,riskPerTradePct:parseFloat($('ahRisk').value),normal:{maxTrades:parseInt($('ahMaxT').value,10)||0},profitProtection:{enabled:$('ahPP').checked},news:{enabled:$('ahNews').checked},analysis:{orderFlow:{enabled:$('ahOF').checked}}};
-    if(isFinite(tg)&&tg>0)body.profitProtection.target=tg;
+    var body={symbolsAllowed:syms,news:{enabled:$('ahNews').checked}};
     return act('/api/mentor/config','POST',body,function(){msg='Réglages enregistrés ✅'})}
   if(a==='ctconnect')return api('/api/ctrader/connect-url').then(function(j){window.location.href=j.url}).catch(function(e){msg='cTrader : '+e.message;render()});
   if(a==='ctreconnect')return act('/api/ctrader/reconnect','POST',{});
@@ -5022,19 +5076,56 @@ document.addEventListener('click',function(e){var t=e.target.closest&&e.target.c
 <script id="ares-tab-router">
 /* Un seul panneau visible à la fois : News ne montre plus le hub Mentor */
 (function(){
-  var MAP={tabPanelGold:'panelGold',tabPanelOpr:'panelOpr',tabPanelRobot:'panelRobot',tabPanelNews:'panelNews',tabPanelAccount:'panelAccount',tabPanelBacktest:'panelBacktest',tabPanelAdmin:'panelAdmin'};
+  var MAP={tabPanelGold:'panelGold',tabPanelOpr:'panelOpr',tabPanelRobot:'panelRobot',tabPanelNews:'panelNews',tabPanelAccount:'panelAccount',tabPanelObjective:'panelObjective',tabPanelBacktest:'panelBacktest',tabPanelAdmin:'panelAdmin'};
   function show(tab){
     Object.keys(MAP).forEach(function(t){var p=document.getElementById(MAP[t]),b=document.getElementById(t);
       if(p)p.style.display=(t===tab?'block':'none');if(b)b.classList.toggle('active',t===tab)});
     window.scrollTo(0,0);
   }
   document.addEventListener('click',function(e){
-    var el=e.target.closest&&e.target.closest('[data-t],#tabPanelGold,#tabPanelOpr,#tabPanelRobot,#tabPanelNews,#tabPanelAccount,#tabPanelBacktest,#tabPanelAdmin');
+    var el=e.target.closest&&e.target.closest('[data-t],#tabPanelGold,#tabPanelOpr,#tabPanelRobot,#tabPanelNews,#tabPanelAccount,#tabPanelObjective,#tabPanelBacktest,#tabPanelAdmin');
     if(!el)return;var tab=el.getAttribute('data-t')||el.id;if(!MAP[tab])return;
     setTimeout(function(){show(tab)},60);
   },true);
   /* retour OAuth cTrader -> ouvrir Compte */
   if(/[?&]ctrader=/.test(location.search))setTimeout(function(){show('tabPanelAccount')},1800);
+})();
+</script>
+<script>
+/* Panel OBJECTIF : paramètres indépendants du Mentor. */
+(function(){
+  var $=function(i){return document.getElementById(i)};
+  function api(p,m,b){return window.__aresApi?window.__aresApi(p,m,b):Promise.reject(new Error('key'))}
+  function v(x,d){return x==null||x===''?d:x}
+  function load(){
+    Promise.all([api('/api/mentor/config'),api('/api/mentor/status')]).then(function(r){
+      var C=(r[0]&&r[0].config)||{},st=r[1]||{},N=C.normal||{},PP=C.profitProtection||{};
+      var set=function(id,val){var e=$(id);if(e&&document.activeElement!==e)e.value=val};
+      set('objPts',v(N.objectivePoints,''));set('objLoss',v(N.dailyLossPoints,''));set('objRisk',v(C.riskPerTradePct,''));
+      set('objMax',v(N.maxTrades,0));set('objTarget',v(PP.target,N.objectivePoints));
+      if($('objPP')&&document.activeElement!==$('objPP'))$('objPP').checked=!!PP.enabled;
+      var o=st.objective||{};
+      $('objTop').textContent=o.reached?'OBJECTIF ATTEINT ✅':'EN COURS';
+      var t=function(a,b){return '<div class="ah-tile"><b>'+a+'</b><div class="mu">'+b+'</div></div>'};
+      $('objTiles').innerHTML=t(v(o.points,'—')+' pts','Objectif jour')+t('-'+v(st.dailyLossLimit,'—')+' pts','Limite de perte')+t(v(st.tradesToday,0),'Trades du jour')+t(v(st.openPositions,0),'Positions');
+    }).catch(function(e){$('objTop').textContent=e&&e.message==='key'?'clé requise':'indisponible'});
+  }
+  document.addEventListener('click',function(e){
+    if(e.target&&e.target.id==='objSave'){
+      var n=function(id){var x=parseFloat($(id).value);return isFinite(x)?x:undefined};
+      var body={normal:{},profitProtection:{enabled:$('objPP').checked}};
+      if(n('objPts')!==undefined)body.normal.objectivePoints=n('objPts');
+      if(n('objLoss')!==undefined)body.normal.dailyLossPoints=n('objLoss');
+      if(n('objMax')!==undefined)body.normal.maxTrades=parseInt($('objMax').value,10)||0;
+      if(n('objRisk')!==undefined)body.riskPerTradePct=n('objRisk');
+      if(n('objTarget')!==undefined&&n('objTarget')>0)body.profitProtection.target=n('objTarget');
+      $('objMsg').textContent='Enregistrement…';
+      api('/api/mentor/config','POST',body).then(function(){$('objMsg').textContent='Réglages enregistrés ✅';load()}).catch(function(er){$('objMsg').textContent='Échec : '+(er&&er.message||'erreur')});
+    }
+    var el=e.target.closest&&e.target.closest('[data-t="tabPanelObjective"],#tabPanelObjective');
+    if(el)setTimeout(load,200);
+  },false);
+  setInterval(function(){var p=$('panelObjective');if(p&&p.style.display==='block')load()},8000);
 })();
 </script>
 </body>
