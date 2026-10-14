@@ -20,6 +20,10 @@
  *    category|null, forecast|null, previous|null, actual|null (nombres), forecastText, previousText, actualText (texte brut du flux) }
  */
 
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
 const DEFAULT_URLS = [
   'https://nfs.faireconomy.media/ff_calendar_thisweek.json',
   'https://nfs.faireconomy.media/ff_calendar_nextweek.json'
@@ -30,14 +34,16 @@ const DEFAULTS = {
   refreshMs: 30 * 60 * 1000,
   retryMinMs: 60 * 1000,
   timeoutMs: 10000,
-  staleAfterMs: 3 * 60 * 60 * 1000,
+  staleAfterMs: 12 * 60 * 60 * 1000,   // le calendrier de la semaine change peu : 12 h de tolérance
   maxEvents: 1500,
   minGapMs: 30 * 1000,
-  backoff429Ms: 15 * 60 * 1000
+  backoff429Ms: 10 * 60 * 1000,
+  gapMs: 6000
 };
 
 let options = Object.assign({}, DEFAULTS);
 let events = [];
+let manual = [];   // événements saisis par l'admin (publiés, jamais inventés)
 let fetchedAt = 0;
 let lastAttemptAt = 0;
 let lastError = null;
@@ -173,23 +179,72 @@ function extractItems(json) {
   return null;
 }
 
+
+/* Cache disque : évite de ré-interroger le flux (429) à chaque redémarrage. */
+function cacheFile() {
+  if (process.env.NEWS_CACHE_FILE) return process.env.NEWS_CACHE_FILE;
+  try { if (fs.existsSync('/data')) return '/data/news-cache.json'; } catch (_) {}
+  return path.join(os.tmpdir(), 'ares-news-cache.json');
+}
+function saveCache() {
+  try { fs.writeFileSync(cacheFile(), JSON.stringify({ fetchedAt, events, manual })); } catch (_) {}
+}
+function loadCache() {
+  try {
+    const j = JSON.parse(fs.readFileSync(cacheFile(), 'utf8'));
+    if (j && Array.isArray(j.events) && Number(j.fetchedAt) > 0 && !events.length) {
+      events = j.events; fetchedAt = Number(j.fetchedAt); manual = Array.isArray(j.manual) ? j.manual : [];
+      return true;
+    }
+  } catch (_) {}
+  return false;
+}
+
+
+function parisToTs(d, t) {
+  const [y, mo, da] = String(d).split('-').map(Number), [h, mi] = String(t).split(':').map(Number);
+  if (![y, mo, da, h, mi].every(Number.isFinite)) return NaN;
+  const off = ts => { const f = new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Paris', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).formatToParts(new Date(ts)).reduce((a, p) => (a[p.type] = p.value, a), {}); return Date.UTC(f.year, f.month - 1, f.day, f.hour, f.minute) - ts; };
+  const guess = Date.UTC(y, mo - 1, da, h, mi);
+  let ts = guess - off(guess); ts = guess - off(ts);
+  return ts;
+}
+/** Ajoute un événement USD saisi à la main : { date:'YYYY-MM-DD', time:'HH:MM' (heure de Paris), title, forecast, previous, impact }. */
+function addManual(b) {
+  b = b || {};
+  const ts = parisToTs(b.date, b.time);
+  if (!Number.isFinite(ts)) return { ok: false, error: 'date/heure invalides (YYYY-MM-DD et HH:MM, heure de Paris)' };
+  const imp = /^(low|medium|high)$/i.test(String(b.impact)) ? String(b.impact) : 'High';
+  const ev = normalize({ title: String(b.title || '').slice(0, 120), country: 'USD', date: new Date(ts).toISOString(), impact: imp, forecast: b.forecast == null ? '' : String(b.forecast), previous: b.previous == null ? '' : String(b.previous) });
+  if (!ev) return { ok: false, error: 'titre requis' };
+  ev.manual = true;
+  manual = manual.filter(x => x.id !== ev.id).concat(ev).slice(-200);
+  events = events.filter(x => x.id !== ev.id).concat(ev).sort((a, c) => a.ts - c.ts);
+  fetchedAt = Date.now();   // calendrier confirmé par l'admin : considéré à jour
+  saveCache();
+  return { ok: true, event: ev };
+}
+function clearManual() { manual = []; events = events.filter(x => !x.manual); saveCache(); return { ok: true }; }
+
 /* ------------------------------------------------------------------ */
 /* Réseau                                                              */
 /* ------------------------------------------------------------------ */
 
-async function fetchJson(url) {
+async function fetchJson(url, extraHeaders) {
   if (fetchImpl) return fetchImpl(url);
   if (typeof fetch !== 'function') throw new Error('fetch indisponible (Node >= 18 requis)');
   const ac = typeof AbortController === 'function' ? new AbortController() : null;
   const to = ac ? setTimeout(() => ac.abort(), options.timeoutMs) : null;
   try {
     const res = await fetch(url, {
-      headers: { Accept: 'application/json', 'User-Agent': 'ARES-AI-News/2.0' },
+      headers: Object.assign({ Accept: 'application/json', 'User-Agent': 'Mozilla/5.0 (compatible; ARES-AI-News/2.1)' }, extraHeaders || {}),
       signal: ac ? ac.signal : undefined
     });
     if (!res.ok) {
       const e = new Error('HTTP ' + res.status);
       e.status = res.status;
+      const ra = Number(res.headers && res.headers.get && res.headers.get('retry-after'));
+      if (Number.isFinite(ra) && ra > 0) e.retryAfterMs = Math.min(ra * 1000, 60 * 60 * 1000);
       throw e;
     }
     return await res.json();
@@ -199,6 +254,26 @@ async function fetchJson(url) {
   } finally {
     if (to) clearTimeout(to);
   }
+}
+
+
+/* Source de secours : calendrier économique TradingView (endpoint non officiel), USD + zone euro. */
+let activeSource = 'Forex Factory (faireconomy)';
+async function fetchTradingView() {
+  const from = new Date(Date.now() - 864e5).toISOString(), to = new Date(Date.now() + 8 * 864e5).toISOString();
+  const url = 'https://economic-calendar.tradingview.com/events?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to) + '&countries=US%2CEU';
+  const j = await fetchJson(url, { Origin: 'https://www.tradingview.com', Referer: 'https://www.tradingview.com/' });
+  const arr = j && j.result;
+  if (!Array.isArray(arr)) throw new Error('réponse TradingView inattendue');
+  const val = (v, e) => (v === null || v === undefined || v === '') ? '' : String(v) + (e.scale || '') + (e.unit === '%' ? '%' : '');
+  const out = [];
+  for (const e of arr) {
+    const ccy = String(e.currency || (e.country === 'US' ? 'USD' : e.country === 'EU' ? 'EUR' : '')).toUpperCase();
+    if (ccy !== 'USD' && ccy !== 'EUR') continue;
+    const ev = normalize({ title: e.title || e.indicator, country: ccy, date: e.date, impact: e.importance >= 1 ? 'High' : e.importance === 0 ? 'Medium' : 'Low', forecast: val(e.forecast, e), previous: val(e.previous, e), actual: val(e.actual, e) });
+    if (ev) out.push(ev);
+  }
+  return out;
 }
 
 /* ------------------------------------------------------------------ */
@@ -221,6 +296,8 @@ async function refresh(opts = {}) {
     let primaryError = null;
 
     for (let i = 0; i < urls.length; i++) {
+      if (i > 0 && !primaryOk) break;                  // 1re source en échec : on ne multiplie pas les requêtes
+      if (i > 0) await new Promise(r => setTimeout(r, options.gapMs));
       try {
         const json = await fetchJson(urls[i]);
         const items = extractItems(json);
@@ -233,15 +310,24 @@ async function refresh(opts = {}) {
       } catch (e) {
         const msg = String((e && e.message) || e).slice(0, 160);
         if (i === 0) primaryError = msg;
-        if (e && e.status === 429) nextAllowedAt = Date.now() + options.backoff429Ms;
+        if (e && e.status === 429) nextAllowedAt = Date.now() + Math.max(options.backoff429Ms, e.retryAfterMs || 0);
         else if (i > 0 && /HTTP 404/.test(msg)) { /* semaine suivante pas encore publiée : normal */ }
         else if (i > 0) console.warn('[news] source secondaire indisponible:', msg);
       }
     }
 
+    if (primaryOk) activeSource = 'Forex Factory (faireconomy)';
+    if (!primaryOk) {
+      try {
+        const tvEvents = await fetchTradingView();
+        if (tvEvents.length) { tvEvents.forEach(ev => merged.set(ev.id, ev)); primaryOk = true; activeSource = 'TradingView (secours)'; }
+      } catch (e) { console.warn('[news] TradingView indisponible:', String((e && e.message) || e).slice(0, 120)); }
+    }
     if (primaryOk) {
+      for (const m of manual) merged.set(m.id, m);
       events = [...merged.values()].sort((a, b) => a.ts - b.ts).slice(0, options.maxEvents);
       fetchedAt = Date.now();
+      saveCache();
       lastError = null;
       failures = 0;
     } else {
@@ -276,7 +362,8 @@ function start(custom = {}) {
   const envMs = envRefreshMs();
   if (envMs && custom.refreshMs === undefined) options.refreshMs = envMs;
   running = true;
-  refresh({ force: true }).catch(() => {}).then(scheduleNext);
+  if (loadCache() && Date.now() - fetchedAt < options.refreshMs) scheduleNext();   // cache récent : pas de requête au démarrage
+  else refresh({ force: true }).catch(() => {}).then(scheduleNext);
   return status();
 }
 
@@ -327,7 +414,7 @@ function status() {
     ok: fetchedAt > 0,
     state,
     enabled: options.enabled,
-    source: 'Forex Factory (faireconomy)',
+    source: activeSource,
     urls: configuredUrls().length,
     items: events.length,
     fetchedAt: fetchedAt || null,
@@ -347,6 +434,8 @@ function _reset() {
 }
 
 module.exports = {
+  addManual,
+  clearManual,
   start,
   stop,
   refresh,
