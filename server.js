@@ -367,6 +367,15 @@ app.get('/', (req, res) => {
 
 app.get('/index.html', (req, res) => res.redirect(301, '/'));
 
+// Module OPR (panneau OPR : robot automatique, état, P/L).
+app.get('/opr-module.js', (req, res) => {
+  res.set('Cache-Control', 'no-cache');
+  res.type('application/javascript');
+  res.sendFile(path.join(__dirname, 'opr-module.js'), err => {
+    if (err && !res.headersSent) res.status(200).send('/* opr-module.js introuvable */');
+  });
+});
+
 // Module NEWS de l'interface. S'il manque, on répond un script vide (l'interface ne casse pas).
 app.get('/news-module.js', (req, res) => {
   res.set('Cache-Control', 'no-cache');
