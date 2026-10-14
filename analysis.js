@@ -20,6 +20,7 @@ const DEFAULT_ANALYSIS = {
   htfVeto: true,          // biais HTF opposé = WAIT
   minScore: 6,            // score de confluence minimal
   minComponents: 3,       // nb minimal de composants validés
+  minConfidencePct: 70,   // score de confluence minimal en % (score / score max) : SCALPING et DAYTRADE
   weights: { structure: 3, mtf: 2, trigger: 2, sweep: 2, zone: 2, premiumDiscount: 1, orderFlow: 2 },
   orderFlow: { enabled: false, requireWhenEnabled: false }   // true : filtre ON + donnée indisponible -> WAIT
 };
@@ -197,6 +198,7 @@ function evaluate(ctx) {
   const base = { components: comps, score, maxScore, confidence };
   if (!sOk) return Object.assign(wait('structure non alignée', comps), base);
   if (!trig) return Object.assign(wait('pas de bougie de confirmation sur le timeframe d\'entrée', comps), base);
+  if (cfg.minConfidencePct && confidence < cfg.minConfidencePct) return Object.assign(wait(`score ${confidence}% < minimum ${cfg.minConfidencePct}% (score ${score}/${maxScore})`, comps), base);
   if (score < cfg.minScore || passed < cfg.minComponents) return Object.assign(wait(`confluence insuffisante : score ${score}/${maxScore} (min ${cfg.minScore}), ${passed} composants (min ${cfg.minComponents})`, comps), base);
 
   // SL structurel : sous/sur le dernier creux/sommet récent, le sweep ou l'OB, + marge
