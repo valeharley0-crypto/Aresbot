@@ -1,7 +1,7 @@
-/* ARES — panneau OPR (robot AUTOMATIQUE côté serveur). Chargé par index.html via <script src="opr-module.js">.
- *   GET  /api/mentor/opr          -> état du jour (range, tableau, signal), trades OPR, P/L
- *   POST /api/mentor/config {opr} -> ON/OFF du robot OPR
- * Pendant la fenêtre OPR (heure française) l'IA Mentor est en PAUSE : l'OPR continue seul, sans l'IA Mentor.
+/* ARES — panneau LOR · London Open Reversal (robot AUTOMATIQUE côté serveur ; clé API « opr » gardée pour compatibilité). Chargé par index.html via <script src="opr-module.js">.
+ *   GET  /api/mentor/opr          -> état du jour (range, tableau, signal), trades LOR, P/L
+ *   POST /api/mentor/config {opr} -> ON/OFF du robot LOR
+ * Si pauseMentor = true, l'IA Mentor est en PAUSE pendant la fenêtre LOR (GMT).
  * Aucune donnée simulée : sans bougies M5 réelles de cTrader => « DATA_UNAVAILABLE ». Aucun profit garanti.
  */
 (function () {
@@ -16,12 +16,13 @@
     return window.__aresApi(path, method, body);
   }
   function money(v) { var n = Number(v) || 0; return (n >= 0 ? '+' : '−') + Math.abs(n).toFixed(2) + ' $'; }
-  function hm(iso) { try { return new Date(iso).toLocaleString('fr-FR', { timeZone: 'Europe/Paris', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } }
+  function hm(iso) { try { return new Date(iso).toLocaleString('fr-FR', { timeZone: 'UTC', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } }
 
   var STAGES = {
-    WAIT_RANGE: ['⏳', 'En attente du début de l\'OPR'], FORMING: ['🕒', 'OPR en formation…'], WATCHING: ['👀', 'Surveillance : cassure du range (clôture M5)'],
-    RANGE_OUT: ['⛔', 'OPR hors limites : pas de trade aujourd\'hui'], EXPIRED: ['⌛', 'Fenêtre terminée'], BLOCKED: ['⛔', 'Pas de trade le vendredi'],
-    CLOSED: ['💤', 'Marché fermé (week-end)'], NO_DATA: ['⚪', 'DATA_UNAVAILABLE : bougies M5 indisponibles']
+    WAIT_RANGE: ['⏳', 'Range asiatique en formation'], WATCHING: ['👀', 'Attente du sweep du Asian high/low'], SWEPT: ['🧹', 'Sweep fait : attente du CHoCH M5'],
+    ARMED: ['🎯', 'Setup prêt : attente du retour du prix sur le FVG/OB'], FILLED: ['✅', 'Zone touchée'], RANGE_OUT: ['⛔', 'Range asiatique hors limites : pas de trade'],
+    NO_ZONE: ['⛔', 'Pas de zone FVG/OB valide : pas de trade'], NO_RR: ['⛔', 'RR insuffisant : pas de trade'], NO_SETUP: ['⌛', 'Aucun setup dans la fenêtre'], EXPIRED: ['⌛', 'Ordre expiré'],
+    BLOCKED: ['⛔', 'Jour sans trade'], CLOSED: ['💤', 'Marché fermé (week-end)'], NO_DATA: ['⚪', 'DATA_UNAVAILABLE : bougies M5 indisponibles']
   };
 
   function ensureCard() {
@@ -33,7 +34,7 @@
       c.addEventListener('click', function (ev) {
         var b = ev.target.closest && ev.target.closest('[data-opr]'); if (!b || st.busy) return;
         var on = !(st.d && st.d.enabled && st.d.autoTrade);
-        if (on && !window.confirm('Activer le robot OPR automatique ? Il enverra de VRAIS ordres sur cTrader (commence par un compte DEMO).')) return;
+        if (on && !window.confirm('Activer le robot LOR automatique ? Il enverra de VRAIS ordres sur cTrader (commence par un compte DEMO).')) return;
         st.busy = true;
         api('/api/mentor/config', 'POST', { opr: { enabled: on, autoTrade: on } }).then(refresh).catch(function (e) { st.err = e.message === 'key' ? 'key' : 'net'; draw(); }).then(function () { st.busy = false; });
       });
@@ -48,20 +49,20 @@
     else if (st.err || !d) h = '<div class="empty">' + (st.err ? 'Serveur injoignable.' : 'Chargement…') + '</div>';
     else {
       var on = d.enabled && d.autoTrade, S = STAGES[d.stage] || ['•', d.stage];
-      h = '<div class="card-title"><span>🤖 ROBOT OPR · ' + esc(d.symbol) + ' · M5 · heure française</span><span style="font:700 12px monospace;color:' + (on ? G : R) + '">' + (on ? '● AUTO ON' : '○ AUTO OFF') + '</span></div>' +
+      h = '<div class="card-title"><span>🤖 ROBOT LOR · ' + esc(d.symbol) + ' · M5 · heures GMT</span><span style="font:700 12px monospace;color:' + (on ? G : R) + '">' + (on ? '● AUTO ON' : '○ AUTO OFF') + '</span></div>' +
         '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px">' +
-        '<button class="btn ' + (on ? '' : 'primary') + '" data-opr="1">' + (on ? '⏹ Arrêter le robot OPR' : '▶ Activer le robot OPR (automatique)') + '</button>' +
-        '<span style="font-size:13px;font-weight:700;color:' + (d.mentorPaused ? Y : 'var(--muted,#8292aa)') + '">' + (d.mentorPaused ? '⏸ IA Mentor en PAUSE (OPR actif)' : 'IA Mentor : normal (hors fenêtre OPR)') + '</span></div>' +
+        '<button class="btn ' + (on ? '' : 'primary') + '" data-opr="1">' + (on ? '⏹ Arrêter le robot LOR' : '▶ Activer le robot LOR (automatique)') + '</button>' +
+        '<span style="font-size:13px;font-weight:700;color:' + (d.mentorPaused ? Y : 'var(--muted,#8292aa)') + '">' + (d.mentorPaused ? '⏸ IA Mentor en PAUSE (LOR actif)' : 'IA Mentor : normal (hors fenêtre LOR)') + '</span></div>' +
         '<div style="font-size:14px;margin:6px 0"><b>' + S[0] + ' ' + esc(S[1]) + '</b>' + (d.note ? ' <span style="color:var(--muted,#8292aa)">· ' + esc(d.note) + '</span>' : '') + '</div>';
-      if (d.range) h += '<div class="mono" style="font-size:13px;margin:4px 0 8px">Range OPR : haut <b>' + esc(d.range.hi) + '</b> · bas <b>' + esc(d.range.lo) + '</b> · <b style="color:' + (d.range.ok ? G : R) + '">' + esc(d.range.pips) + ' pips</b> (limites ' + esc(d.config.minPips) + '–' + esc(d.config.maxPips) + ')</div>';
+      if (d.range) h += '<div class="mono" style="font-size:13px;margin:4px 0 8px">Range asiatique : haut <b>' + esc(d.range.hi) + '</b> · bas <b>' + esc(d.range.lo) + '</b> · <b style="color:' + (d.range.ok ? G : R) + '">' + esc(d.range.pips) + ' $</b> (limites ' + esc(d.config.asiaMin) + '–' + esc(d.config.asiaMax) + ' $)</div>';
       if (d.rows) h += '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px">' + d.rows.map(function (r) {
         var col = r.ok == null ? 'var(--muted,#8292aa)' : r.ok ? G : R;
         return '<span style="padding:5px 12px;border-radius:999px;border:1px solid ' + col + ';color:' + col + ';font-size:13px;font-weight:700">' + esc(r.l) + ' ' + esc(r.v) + '</span>';
       }).join('') + '</div>';
-      if (d.signal) h += '<div style="font-weight:800;font-size:16px;color:' + (d.signal.dir === 'BUY' ? G : R) + ';margin:6px 0">' + (d.signal.dir === 'BUY' ? '▲' : '▼') + ' Signal ' + esc(d.signal.dir) + ' (tableau tout vert)' + (d.today && d.today.done ? ' · ✅ trade envoyé' : (on ? ' · envoi au robot…' : ' · robot OFF : aucun ordre')) + '</div>';
+      if (d.signal) h += '<div style="font-weight:800;font-size:16px;color:' + (d.signal.dir === 'BUY' ? G : R) + ';margin:6px 0">' + (d.signal.dir === 'BUY' ? '▲' : '▼') + ' Signal ' + esc(d.signal.dir) + ' · entrée ' + esc(d.signal.entry) + ' · SL ' + esc(d.signal.sl) + ' · TP ' + esc(d.signal.tp) + ' · RR ' + esc(d.signal.rr) + (d.today && d.today.done ? ' · ✅ trade envoyé' : (on ? ' · envoi au robot…' : ' · robot OFF : aucun ordre')) + '</div>';
       var s = d.stats || {};
       h += '<div style="display:flex;gap:22px;flex-wrap:wrap;margin:12px 0 6px">' +
-        '<div><div style="font-size:12px;color:var(--muted,#8292aa)">P/L TOTAL OPR</div><b style="font-size:20px;color:' + ((s.pnlMoney || 0) >= 0 ? G : R) + '">' + money(s.pnlMoney) + '</b></div>' +
+        '<div><div style="font-size:12px;color:var(--muted,#8292aa)">P/L TOTAL LOR</div><b style="font-size:20px;color:' + ((s.pnlMoney || 0) >= 0 ? G : R) + '">' + money(s.pnlMoney) + '</b></div>' +
         '<div><div style="font-size:12px;color:var(--muted,#8292aa)">CE MOIS</div><b style="font-size:20px;color:' + ((s.monthPnl || 0) >= 0 ? G : R) + '">' + money(s.monthPnl) + '</b></div>' +
         '<div><div style="font-size:12px;color:var(--muted,#8292aa)">TRADES</div><b style="font-size:20px">' + esc(s.total || 0) + '</b> <small>' + esc(s.wins || 0) + ' TP · ' + esc(s.losses || 0) + ' SL</small></div>' +
         '<div><div style="font-size:12px;color:var(--muted,#8292aa)">WIN RATE</div><b style="font-size:20px">' + (s.winRate == null ? '—' : s.winRate + '%') + '</b></div></div>';
@@ -69,8 +70,8 @@
       h += tr.length ? '<div style="max-height:260px;overflow:auto"><table style="width:100%;font-size:13px"><thead><tr><th>Date (FR)</th><th>Sens</th><th>Entry</th><th>SL</th><th>TP</th><th>Résultat</th></tr></thead><tbody>' + tr.map(function (t) {
         var res = t.status === 'CLOSED' ? (t.outcome === 'WIN' ? '<b style="color:' + G + '">TP ✅ ' + money(t.pnlMoney) + '</b>' : t.outcome === 'LOSS' ? '<b style="color:' + R + '">SL ❌ ' + money(t.pnlMoney) + '</b>' : '➖ ' + money(t.pnlMoney)) : (t.status === 'OPEN' ? '⏳ OPEN' : esc(t.status));
         return '<tr><td>' + esc(hm(t.ts)) + '</td><td style="color:' + (t.action === 'BUY' ? G : R) + '">' + esc(t.action) + '</td><td>' + esc(Number(t.entry).toFixed(2)) + '</td><td>' + esc(Number(t.sl).toFixed(2)) + '</td><td>' + esc(Number(t.tp).toFixed(2)) + '</td><td>' + res + '</td></tr>';
-      }).join('') + '</tbody></table></div>' : '<div class="empty" style="padding:10px 0">Aucun trade OPR du robot pour le moment.</div>';
-      h += '<div style="font-size:12px;color:var(--muted,#8292aa);margin-top:10px">OPR ' + esc(d.config.oprStart) + '–' + esc(d.config.oprEnd) + ' · entrée ' + esc(d.config.greenStart) + '–' + esc(d.config.redStart) + ' (heure française) · RSI ' + esc(d.config.rsiLen) + ' (' + esc(d.config.rsiOS) + '–' + esc(d.config.rsiOB) + ') · RR ' + esc(d.config.rr) + ' · risque ' + esc(d.config.riskPct) + '% · 1 trade/jour · pas de trade le vendredi. Aucun profit garanti.</div>';
+      }).join('') + '</tbody></table></div>' : '<div class="empty" style="padding:10px 0">Aucun trade LOR du robot pour le moment.</div>';
+      h += '<div style="font-size:12px;color:var(--muted,#8292aa);margin-top:10px">LOR · range asiatique ' + esc(d.config.asiaStart) + '–' + esc(d.config.asiaEnd) + ' · fenêtre ' + esc(d.config.winStart) + '–' + esc(d.config.winEnd) + ' GMT · TP ' + esc(d.config.target) + ' · RR min ' + esc(d.config.minRR) + ' · biais H4 ' + (d.config.biasFilter ? 'oui' : 'non') + ' · risque ' + esc(d.config.riskPct) + '% · 1 trade/jour. Aucun profit garanti.</div>';
     }
     if (h !== st.last) { st.last = h; c.innerHTML = h; }
   }
