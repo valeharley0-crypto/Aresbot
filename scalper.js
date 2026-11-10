@@ -21,7 +21,7 @@ const { PT } = require('./ctrader/client');
 const HFT = require('./hft-engine');
 
 const LABEL = 'ARESSCALP';          // même label qu'avant : les anciennes positions / ordres orphelins sont fermés / annulés automatiquement
-const CFG_VERSION = 'hft-3';        // une autre version (ancien robot LOR) : on garde seulement les paires, statistiques remises à zéro
+const CFG_VERSION = 'hft-4';        // une autre version (ancien robot LOR) : on garde seulement les paires, statistiques remises à zéro
 const BOT_NAME = 'ARES HFT';
 const ORPHAN_GRACE_MS = 15000, OPEN_WAIT_MS = 9000, EMPTY_GRACE_MS = 1500;
 const norm = s => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -68,7 +68,7 @@ const DEFAULTS = {
   p2: 0.55, p3: 0.62, p4: 0.70, p5: 0.78,   // probabilité minimale pour 2 / 3 / 4 / 5 positions
   basketArmFrac: 0.25,       // trailing du panier armé quand le gain atteint 25 % du risque du trade
   basketGiveBackPct: 40,     // le panier est fermé si le gain retombe de 40 % sous son plus haut
-  failFastSec: 6,            // sortie « échec rapide » : si après N s le trade n'a touché aucun TP et que le panier perd plus de failFastLossFrac × risque -> fermé (0 = off)
+  failFastSec: 0,            // sortie « échec rapide » : si après N s le trade n'a touché aucun TP et que le panier perd plus de failFastLossFrac × risque -> fermé (0 = off)
   failFastLossFrac: 0.2,
   maxHoldLockedSec: 30,     // durée max quand le gain est verrouillé (laisse courir le runner)
   lockAtFrac: 0.6            // quand le gain atteint 60 % du TP, le SL est remonté (le gain est verrouillé) ; 0 = off
