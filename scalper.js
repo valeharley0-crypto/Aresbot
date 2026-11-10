@@ -21,7 +21,7 @@ const { PT } = require('./ctrader/client');
 const HFT = require('./hft-engine');
 
 const LABEL = 'ARESSCALP';          // même label qu'avant : les anciennes positions / ordres orphelins sont fermés / annulés automatiquement
-const CFG_VERSION = 'hft-2';        // une autre version (ancien robot LOR) : on garde seulement les paires, statistiques remises à zéro
+const CFG_VERSION = 'hft-3';        // une autre version (ancien robot LOR) : on garde seulement les paires, statistiques remises à zéro
 const BOT_NAME = 'ARES HFT';
 const ORPHAN_GRACE_MS = 15000, OPEN_WAIT_MS = 9000, EMPTY_GRACE_MS = 1500;
 const norm = s => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -48,17 +48,17 @@ const DEFAULTS = {
   maxWeeklyLossPct: 0,       // perte maximale de la semaine (0 = off)
   maxConsecLosses: 5,        // pause du jour après N pertes de suite (0 = off)
   // --- cadence ---
-  cooldownSec: 15,           // pause minimale entre deux trades d'une même paire
-  maxTradesPerMin: 4,        // trades ouverts au maximum par minute (toutes paires)
-  maxTradesPerDay: 150,      // 0 = pas de limite
-  maxLatencyMs: 900,         // si l'ordre met plus longtemps à être accepté (moyenne), le robot s'arrête de trader (le temps que ça revienne)
+  cooldownSec: 2,           // pause minimale entre deux trades d'une même paire
+  maxTradesPerMin: 12,        // trades ouverts au maximum par minute (toutes paires)
+  maxTradesPerDay: 1000,      // 0 = pas de limite
+  maxLatencyMs: 400,         // si l'ordre met plus longtemps à être accepté (moyenne), le robot s'arrête de trader (le temps que ça revienne)
   // --- session ---
   sessionFilter: true, sessionStartUtc: 7, sessionEndUtc: 20,   // lundi-vendredi, heures UTC (Londres + New York)
   blockWindows: '',          // fenêtres de pause UTC « HH:MM-HH:MM » séparées par des virgules (ex. annonces : 12:25-12:50,14:55-15:10)
   // --- signal tick + sortie (en bp du prix : 1 bp = 0,01 %) ---
   impulseBp: HFT.DEFAULTS.impulseBp, maxImpulseBp: HFT.DEFAULTS.maxImpulseBp, windowMs: HFT.DEFAULTS.windowMs, minTicks: HFT.DEFAULTS.minTicks,
   dirFrac: HFT.DEFAULTS.dirFrac, maxSpreadBp: HFT.DEFAULTS.maxSpreadBp, tpBp: HFT.DEFAULTS.tpBp, slBp: HFT.DEFAULTS.slBp,
-  maxHoldSec: 60,            // sortie au temps : le trade est fermé au marché après N secondes
+  maxHoldSec: 15,            // sortie au temps : le trade est fermé au marché après N secondes
   // --- v2 : probabilité calibrée, petit solde, gestion du gain ---
   minLegs: 2,                // minimum 2 positions : si le solde ne permet pas 2 positions, PAS de trade
   smallBalLimit: 50,         // solde (USD) en dessous duquel on utilise smallBalRiskPct
@@ -68,7 +68,7 @@ const DEFAULTS = {
   p2: 0.55, p3: 0.62, p4: 0.70, p5: 0.78,   // probabilité minimale pour 2 / 3 / 4 / 5 positions
   basketArmFrac: 0.25,       // trailing du panier armé quand le gain atteint 25 % du risque du trade
   basketGiveBackPct: 40,     // le panier est fermé si le gain retombe de 40 % sous son plus haut
-  maxHoldLockedSec: 150,     // durée max quand le gain est verrouillé (laisse courir le runner)
+  maxHoldLockedSec: 30,     // durée max quand le gain est verrouillé (laisse courir le runner)
   lockAtFrac: 0.6            // quand le gain atteint 60 % du TP, le SL est remonté (le gain est verrouillé) ; 0 = off
 };
 
@@ -383,7 +383,7 @@ class UserScalper {
       if (this.day.startBalance == null && s.balance != null) this.day.startBalance = num(s.balance, null);
       this.risk();
       const has = Object.keys(this.trades).length || this.live.positions.length;
-      const gap = has ? 350 : (this.active ? 3000 : 10000);
+      const gap = has ? 150 : (this.active ? 3000 : 10000);
       if (t - this.lastTick < gap) return; this.lastTick = t;
       await this.refresh();
       if (this.active || Object.keys(this.trades).length) await this.manage(); else await this.sweepOrphans();
