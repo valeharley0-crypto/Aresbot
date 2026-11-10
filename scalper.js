@@ -31,7 +31,7 @@ const r2 = x => Math.round(x * 100) / 100;
 const r3 = x => Math.round(x * 1000) / 1000;
 const sideOf = v => (v === 1 || v === 'BUY' || v === 'TRADE_SIDE_BUY' ? 'BUY' : 'SELL');
 const PAIRS = ['XAUUSD', 'EURUSD'];
-const LADDER = { 1: [1], 2: [0.8, 1.4], 4: [0.6, 0.9, 1.2, 1.7], 5: [0.6, 0.8, 1.0, 1.4, 1.8] };   // TP de chaque position, en multiples de tpBp
+const LADDER = { 1: [1], 2: [0.8, 1.6], 3: [0.6, 1.0, 2.0], 4: [0.6, 0.9, 1.3, 2.2], 5: [0.6, 0.8, 1.1, 1.6, 2.6] };   // v2 : la dernière position est un « runner » (TP plus loin)   // TP de chaque position, en multiples de tpBp
 const tid = b => String(b || '').split('-')[0];   // commentaire d'une position = <id du trade>-<n° de position>
 
 const DEFAULTS = {
@@ -59,6 +59,16 @@ const DEFAULTS = {
   impulseBp: HFT.DEFAULTS.impulseBp, maxImpulseBp: HFT.DEFAULTS.maxImpulseBp, windowMs: HFT.DEFAULTS.windowMs, minTicks: HFT.DEFAULTS.minTicks,
   dirFrac: HFT.DEFAULTS.dirFrac, maxSpreadBp: HFT.DEFAULTS.maxSpreadBp, tpBp: HFT.DEFAULTS.tpBp, slBp: HFT.DEFAULTS.slBp,
   maxHoldSec: 60,            // sortie au temps : le trade est fermé au marché après N secondes
+  // --- v2 : probabilité calibrée, petit solde, gestion du gain ---
+  minLegs: 2,                // minimum 2 positions : si le solde ne permet pas 2 positions, PAS de trade
+  smallBalLimit: 50,         // solde (USD) en dessous duquel on utilise smallBalRiskPct
+  smallBalRiskPct: 25,       // risque max d'un trade (% du solde) pour un petit solde (lot minimal broker oblige). 10 $ -> 2,5 $ ; 20 $ -> 5 $
+  calibMin: 30,              // nb de trades réels (même tranche de score) nécessaires pour calculer la probabilité
+  probBand: 8,               // tranche de score comparée : score ± probBand
+  p2: 0.55, p3: 0.62, p4: 0.70, p5: 0.78,   // probabilité minimale pour 2 / 3 / 4 / 5 positions
+  basketArmFrac: 0.25,       // trailing du panier armé quand le gain atteint 25 % du risque du trade
+  basketGiveBackPct: 40,     // le panier est fermé si le gain retombe de 40 % sous son plus haut
+  maxHoldLockedSec: 150,     // durée max quand le gain est verrouillé (laisse courir le runner)
   lockAtFrac: 0.6            // quand le gain atteint 60 % du TP, le SL est remonté (le gain est verrouillé) ; 0 = off
 };
 
@@ -91,6 +101,10 @@ function sanitizeConfig(src, cur) {
   int('minScore', 30, 95); int('score4', 31, 98); int('score5', 32, 99); n('riskMult4', 1, 4); n('riskMult5', 1, 6); n('maxTotalRiskPct', 0.1, 5);
   if (c.score4 <= c.minScore) c.score4 = Math.min(98, c.minScore + 10);
   if (c.score5 <= c.score4) c.score5 = Math.min(99, c.score4 + 10);
+  int('minLegs', 2, 5); n('smallBalLimit', 0, 100000); n('smallBalRiskPct', 1, 60); int('calibMin', 10, 500); int('probBand', 2, 25);
+  n('p2', 0.4, 0.95); n('p3', 0.4, 0.97); n('p4', 0.4, 0.98); n('p5', 0.4, 0.99);
+  if (c.p3 <= c.p2) c.p3 = Math.min(0.97, c.p2 + 0.03); if (c.p4 <= c.p3) c.p4 = Math.min(0.98, c.p3 + 0.03); if (c.p5 <= c.p4) c.p5 = Math.min(0.99, c.p4 + 0.03);
+  n('basketArmFrac', 0.05, 1); n('basketGiveBackPct', 5, 95); int('maxHoldLockedSec', 3, 3600);
   n('maxDailyLossPct', 0, 90); n('maxWeeklyLossPct', 0, 90); int('maxConsecLosses', 0, 50);
   int('cooldownSec', 0, 3600); int('maxTradesPerMin', 1, 30); int('maxTradesPerDay', 0, 2000); int('maxLatencyMs', 100, 5000);
   int('sessionStartUtc', 0, 23); int('sessionEndUtc', 1, 24);
@@ -181,11 +195,24 @@ class UserScalper {
   /** à chaque nouveau tick : évalue le signal ; si signal, tente l'entrée (jamais bloquant pour le flux de ticks) */
   react(name, t) {
     const sig = HFT.evaluate(this.book(name), this.hftCfg(), t); sig.symbol = name; delete sig.ema;
-    if (sig.action !== 'WAIT') { sig.score = HFT.score(sig, this.hftCfg()); sig.legs = this.legsFor(sig.score); }
+    if (sig.action !== 'WAIT') { sig.score = HFT.score(sig, this.hftCfg()); const pr = this.probFor(sig.score); sig.prob = pr.p; sig.probN = pr.n; sig.legs = this.legsFor(sig.score, pr); }
     this.signals[name] = sig;
     if (sig.action !== 'WAIT') this.enter(name, sig, t).catch(e => { this.log(name + ' : erreur entrée : ' + (e && e.message)); });
   }
-  legsFor(score) { const c = this.config; return score >= c.score5 ? 5 : score >= c.score4 ? 4 : score >= c.minScore ? 2 : 0; }
+  /** PROBABILITÉ calibrée : taux de gain RÉEL des trades passés de la même tranche de score (lissé, prior 50 %). null tant que < calibMin trades. */
+  probFor(score) {
+    const c = this.config, b = c.probBand, h = this.history.filter(x => x && x.score != null && Math.abs(x.score - score) <= b && Number.isFinite(x.pnl));
+    const n = h.length; if (n < c.calibMin) return { p: null, n, avg: null };
+    const w = h.filter(x => x.pnl > 0).length, K = 10, avg = r3(h.reduce((a, x) => a + x.pnl, 0) / n);
+    return { p: Math.round((w + 0.5 * K) / (n + K) * 1000) / 1000, n, avg };
+  }
+  /** nb de positions voulu : probabilité calibrée si disponible (et espérance réelle > 0), sinon score (2 positions max en attendant la calibration) */
+  legsFor(score, pr) {
+    const c = this.config; if (score < c.minScore) return 0;
+    if (!pr || pr.p == null) return c.minLegs <= 2 ? 2 : c.minLegs;
+    if (pr.avg != null && pr.avg <= 0) return 0;
+    return pr.p >= c.p5 ? 5 : pr.p >= c.p4 ? 4 : pr.p >= c.p3 ? 3 : pr.p >= c.p2 ? 2 : 0;
+  }
   riskMult(n) { const c = this.config; return n >= 5 ? c.riskMult5 : n >= 4 ? c.riskMult4 : 1; }
   /** résultat réel d'une clôture : somme brute + swap + commission du deal de clôture (EXECUTION_EVENT du broker) */
   onExec(p) {
@@ -264,13 +291,15 @@ class UserScalper {
   plan(name, n0, slDist) {
     const s = this.sess(), sp = s.specs[name], c = this.config, bal = num(s.balance, 0), step = sp.lotStep || 0.01, min = sp.minLot || 0.01, max = Math.min(c.maxLotPerPosition, sp.maxLot || 1e9);
     const fl = v => Math.round(Math.floor(v / step + 1e-9) * step * 1e6) / 1e6, upl = this.unitsPerLot(sp);
-    for (const n of [5, 4, 2, 1]) {
-      if (n > n0) continue;
-      if (c.fixedLot > 0) return { n, per: clamp(Math.max(min, fl(c.fixedLot)), min, max) };
-      const riskPct = Math.min(c.riskPct * this.riskMult(n), c.maxTotalRiskPct), total = slDist > 0 ? bal * riskPct / 100 / (slDist * upl) : min * n, per = fl(total / n);
-      if (per >= min) return { n, per: Math.min(per, max) };
+    const capPct = bal < c.smallBalLimit ? Math.max(c.maxTotalRiskPct, c.smallBalRiskPct) : c.maxTotalRiskPct, cap$ = bal * capPct / 100;
+    for (const n of [5, 4, 3, 2]) {
+      if (n > n0 || n < c.minLegs) continue;
+      if (c.fixedLot > 0) return { n, per: clamp(Math.max(min, fl(c.fixedLot)), min, max), risk$: 0 };
+      const riskPct = Math.min(c.riskPct * this.riskMult(n), capPct), total = slDist > 0 ? bal * riskPct / 100 / (slDist * upl) : min * n;
+      const per = Math.min(Math.max(min, fl(total / n)), max), risk$ = n * per * slDist * upl;
+      if (risk$ <= cap$ + 1e-9) return { n, per, risk$: r2(risk$), cap$: r2(cap$) };
     }
-    return { n: 1, per: min };
+    return { n: 0, per: min, risk$: r2(2 * min * slDist * upl), cap$: r2(cap$) };   // même 2 positions au lot minimal dépassent le risque autorisé
   }
   async enter(name, sig, t) {
     const why = this.gate(name, t); sig.gate = why; if (why) return;
@@ -279,13 +308,11 @@ class UserScalper {
     const s = this.sess(), sp = s.specs[name], q = this.lastQ[name], L = sig.action === 'BUY';
     if (!sp || !q) return;
     const px = L ? q.ask : q.bid, lv = HFT.levels(px, this.hftCfg()), bal = num(s.balance, 0), upl = this.unitsPerLot(sp), pl = this.plan(name, n0, lv.sl), n = pl.n, ladder = LADDER[n] || [1];
+    if (n < 1) { sig.gate = 'solde trop petit pour ' + name + ' (' + cfg.minLegs + ' positions = risque ' + pl.risk$ + ' $ > max ' + pl.cap$ + ' $)'; if (t - this.lastRiskLog > 60000) { this.lastRiskLog = t; this.log(name + ' : ' + sig.gate); } return; }
     if (ladder[0] * cfg.tpBp < 1.5 * (sig.spreadBp || 0)) { sig.gate = 'TP1 trop proche du spread'; return; }
     const risk$ = n * pl.per * lv.sl * upl;
-    if (cfg.fixedLot <= 0 && risk$ > Math.max(bal * cfg.maxTotalRiskPct / 100 * 2, 0.5) && risk$ > bal * 0.10) {
-      sig.gate = 'lot minimal trop gros pour le solde (risque ' + r2(risk$) + ' $)'; if (t - this.lastRiskLog > 60000) { this.lastRiskLog = t; this.log(name + ' : ' + sig.gate); } return;
-    }
     const id = 'H' + name.slice(0, 3) + (this.seq++ % 36).toString(36) + t.toString(36), legs = ladder.map((m, i) => ({ i: i + 1, lots: pl.per, tpMult: m, tpDist: lv.tp * m }));
-    const st = { id, symbol: name, side: sig.action, n, score: sig.score, legs, lots: r2(n * pl.per), slBp: cfg.slBp, tpBp: cfg.tpBp, slDist: lv.sl, tpDist: lv.tp, refPx: px, spreadBp: sig.spreadBp, sigAt: t, sentAt: t, state: 'ENVOI', opened: false, locked: false, lockIds: {}, last: 0, realized: 0, legsClosed: 0, tpHits: 0, sent: 0, maxCount: 0, maxFav: null, reason: sig.reason };
+    const st = { id, symbol: name, side: sig.action, n, score: sig.score, prob: sig.prob, riskUsd: r2(risk$), peakNet: 0, lockStage: 0, legs, lots: r2(n * pl.per), slBp: cfg.slBp, tpBp: cfg.tpBp, slDist: lv.sl, tpDist: lv.tp, refPx: px, spreadBp: sig.spreadBp, sigAt: t, sentAt: t, state: 'ENVOI', opened: false, locked: false, lockIds: {}, last: 0, realized: 0, legsClosed: 0, tpHits: 0, sent: 0, maxCount: 0, maxFav: null, reason: sig.reason };
     this.inflight[name] = true; this.trades[name] = st; this.save();   // enregistré AVANT l'envoi : un ordre n'est jamais orphelin
     let vol = s._volume(sp, pl.per); if (sp.maxVolume > 0) vol = Math.min(vol, sp.maxVolume);
     try {
@@ -296,7 +323,7 @@ class UserScalper {
       if (!ok) { this.log(name + ' : aucune position ouverte'); delete this.trades[name]; this.lastExit[name] = this.now(); return; }
       this.noteLat(st.ackMs); st.sent = ok; st.state = 'ENVOYÉ';
       this.entryTimes.push(t); this.day.trades = (this.day.trades || 0) + 1;
-      this.log(`${name} : ${sig.action} marché · ${ok}/${n} positions × ${pl.per} lot · score ${sig.score} · SL ${cfg.slBp} bp · TP ${ladder.map(m => r2(m * cfg.tpBp)).join('/')} bp · ack ${st.ackMs} ms`);
+      this.log(`${name} : ${sig.action} marché · ${ok}/${n} positions × ${pl.per} lot · score ${sig.score}${sig.prob != null ? ' · proba ' + Math.round(sig.prob * 100) + ' % (' + sig.probN + ')' : ' · proba calibrage ' + sig.probN + '/' + cfg.calibMin} · risque ${r2(risk$)} $ · SL ${cfg.slBp} bp · TP ${ladder.map(m => r2(m * cfg.tpBp)).join('/')} bp · ack ${st.ackMs} ms`);
     } catch (e) {
       this.log(name + ' : ordre refusé : ' + (e && e.message)); delete this.trades[name]; this.lastExit[name] = this.now();
     } finally { this.inflight[name] = false; this.save(); }
@@ -320,7 +347,7 @@ class UserScalper {
   _finish(name, st, reason) {
     const partial = st.gotClose && st.legsClosed < (st.sent || 1), net = r2(st.gotClose ? st.realized : (st.last || 0));
     let result;
-    if (st.closing) result = (st.closing === 'TEMPS' ? 'TEMPS' : 'MANUEL') + (net > 0 ? '+' : '-');
+    if (st.closing) result = (st.closing === 'TEMPS' ? 'TEMPS' : st.closing === 'TRAIL' ? 'TRAIL' : 'MANUEL') + (net > 0 ? '+' : '-');
     else result = net > 0 ? (st.tpHits > 0 ? 'TP' : 'LOCK') : 'SL';
     const win = net > 0, S = this.stats, SY = S.bySymbol[name] || (S.bySymbol[name] = { trades: 0, wins: 0, losses: 0, pnl: 0 }), hold = st.openedAt ? Math.max(0, (st.closedAt || this.now()) - st.openedAt) : 0;
     [S, SY].forEach(x => { x.trades++; if (win) x.wins++; else x.losses++; x.pnl = r2((x.pnl || 0) + net); });
@@ -329,7 +356,7 @@ class UserScalper {
     S.holdMs += hold; if (st.slipBp != null) { S.slipBp = r3(S.slipBp + st.slipBp); S.slipN++; } if (st.ackMs != null) { S.ackMs += st.ackMs; S.ackN++; }
     this.day.pnl = r2((this.day.pnl || 0) + net); if (this.week) this.week.pnl = r2((this.week.pnl || 0) + net);
     this.consec = win ? 0 : (this.consec || 0) + 1; this.lastExit[name] = this.now();
-    this.history.unshift({ id: st.id, symbol: name, side: st.side, lots: st.lots, positions: st.sent || st.n, tpHits: st.tpHits || 0, score: st.score, openedAt: st.openedAt || st.sentAt, closedAt: st.closedAt || this.now(), holdMs: hold, entry: st.fill || st.refPx, closePx: st.closePx || null, slipBp: st.slipBp != null ? st.slipBp : null, spreadBp: st.spreadBp, ackMs: st.ackMs != null ? st.ackMs : null, pnl: net, result, reason: reason || '' });
+    this.history.unshift({ id: st.id, symbol: name, side: st.side, lots: st.lots, positions: st.sent || st.n, tpHits: st.tpHits || 0, score: st.score, prob: st.prob != null ? st.prob : null, openedAt: st.openedAt || st.sentAt, closedAt: st.closedAt || this.now(), holdMs: hold, entry: st.fill || st.refPx, closePx: st.closePx || null, slipBp: st.slipBp != null ? st.slipBp : null, spreadBp: st.spreadBp, ackMs: st.ackMs != null ? st.ackMs : null, pnl: net, result, reason: reason || '' });
     if (this.history.length > 300) this.history.length = 300;
     this.log(`${name} : ${st.side} clôturé → ${result} ${net >= 0 ? '+' : ''}${net} $ · ${st.tpHits || 0}/${st.sent || st.n} TP (${Math.round(hold / 100) / 10} s)` + (partial ? ' · résultat partiel' : ''));
     delete this.trades[name]; this.save();
@@ -396,14 +423,26 @@ class UserScalper {
         }
         if (st.closing) { for (const p of mine) await this.closePos(p, st.closing); continue; }
         // sortie au temps : toutes les positions restantes sont fermées
-        if (t - st.openedAt > cfg.maxHoldSec * 1000) { st.closing = 'TEMPS'; for (const p of mine) await this.closePos(p, 'temps'); continue; }
+        // trailing du PANIER : gain net (réalisé + latent) ; fermé si retombe de basketGiveBackPct % sous son plus haut
+        const netNow = r2((st.realized || 0) + st.last); if (netNow > (st.peakNet || 0)) st.peakNet = netNow;
+        if (st.peakNet >= (st.riskUsd || 0) * cfg.basketArmFrac && st.peakNet > 0 && netNow <= st.peakNet * (1 - cfg.basketGiveBackPct / 100)) {
+          this.log(`${name} : trailing panier (plus haut ${st.peakNet} $ → ${netNow} $) : tout fermé`); st.closing = 'TRAIL'; for (const p of mine) await this.closePos(p, 'trail'); continue;
+        }
+        if (t - st.openedAt > (st.locked ? cfg.maxHoldLockedSec : cfg.maxHoldSec) * 1000) { st.closing = 'TEMPS'; for (const p of mine) await this.closePos(p, 'temps'); continue; }
         // verrouillage du gain : dès qu'un TP est touché, ou quand le gain atteint lockAtFrac du TP -> SL des positions restantes remonté
         if (!st.locked) {
           if (st.tpHits > 0) st.locked = true;
           else if (cfg.lockAtFrac > 0 && q && st.tpDist > 0 && (L ? q.bid - st.fill : st.fill - q.ask) >= st.tpDist * cfg.lockAtFrac) st.locked = true;
           if (st.locked) { this.log(`${name} : gain verrouillé (SL @ ${Number(st.lockPx).toFixed(5)})`); this.save(); }
         }
-        if (st.locked) for (const p of mine) { if (st.lockIds[p.id]) continue; st.lockIds[p.id] = 1; try { await this.amendLock(p, st); } catch (e) { this.log(`${name} : verrouillage position ${p.id} impossible : ` + (e && e.message)); } }
+        // SL en ESCALIER : 1 TP touché -> entrée + 25 % du TP · 2 TP -> SL au TP1 · 3 TP -> SL au TP2 ... (le SL ne descend jamais)
+        if (st.locked) {
+          const hits = st.tpHits || 0, stage = Math.max(1, hits), ref = hits >= 2 ? (st.legs[hits - 2] || {}).tpPx : null;
+          if (stage > (st.lockStage || 0)) {
+            st.lockStage = stage; if (ref != null) st.lockPx = ref; st.lockIds = {}; this.log(`${name} : SL escalier niveau ${stage} @ ${Number(st.lockPx).toFixed(5)}`); this.save();
+          }
+          for (const p of mine) { if (st.lockIds[p.id]) continue; st.lockIds[p.id] = 1; try { await this.amendLock(p, st); } catch (e) { this.log(`${name} : verrouillage position ${p.id} impossible : ` + (e && e.message)); if (stage >= 2) await this.closePos(p, 'verrou impossible'); } }
+        }
         continue;
       }
       // plus aucune position : ouverture en attente, ou trade terminé
