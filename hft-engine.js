@@ -14,18 +14,18 @@
  * « backtest » honnête est la statistique des trades réellement exécutés (DEMO d'abord).
  */
 const DEFAULTS = {
-  windowMs: 1500,        // fenêtre de l'impulsion
-  breakMs: 5000,         // le prix doit être au plus haut (BUY) / plus bas (SELL) de cette période
-  trendMs: 30000,        // constante de temps de la moyenne mobile exponentielle (micro-tendance)
-  impulseBp: 1.2,        // impulsion minimale (bp) dans windowMs
-  maxImpulseBp: 6,       // impulsion maximale (bp) : au-delà = spike, on ne trade pas
-  minTicks: 4,           // nombre minimal de ticks dans la fenêtre
-  dirFrac: 0.7,          // part minimale des ticks dans le sens de l'impulsion
-  maxSpreadBp: 2.5,      // spread maximal accepté (bp)
+  windowMs: 500,        // fenêtre de l'impulsion
+  breakMs: 2000,         // le prix doit être au plus haut (BUY) / plus bas (SELL) de cette période
+  trendMs: 10000,        // constante de temps de la moyenne mobile exponentielle (micro-tendance)
+  impulseBp: 0.8,        // impulsion minimale (bp) dans windowMs
+  maxImpulseBp: 5,       // impulsion maximale (bp) : au-delà = spike, on ne trade pas
+  minTicks: 3,           // nombre minimal de ticks dans la fenêtre
+  dirFrac: 0.75,          // part minimale des ticks dans le sens de l'impulsion
+  maxSpreadBp: 1.5,      // spread maximal accepté (bp)
   spreadWidenMax: 1.5,   // le spread ne doit pas dépasser 1,5 × son niveau médian des 10 dernières secondes
-  staleMs: 1500,         // dernier tick plus vieux que ça = flux périmé, on ne trade pas
-  tpBp: 4,               // take profit (bp)
-  slBp: 6,               // stop loss (bp)
+  staleMs: 600,         // dernier tick plus vieux que ça = flux périmé, on ne trade pas
+  tpBp: 3,               // take profit (bp)
+  slBp: 4,               // stop loss (bp)
   minTpSpread: 2         // TP >= 2 × spread
 };
 
