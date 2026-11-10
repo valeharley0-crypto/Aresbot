@@ -68,6 +68,8 @@ const DEFAULTS = {
   p2: 0.55, p3: 0.62, p4: 0.70, p5: 0.78,   // probabilité minimale pour 2 / 3 / 4 / 5 positions
   basketArmFrac: 0.25,       // trailing du panier armé quand le gain atteint 25 % du risque du trade
   basketGiveBackPct: 40,     // le panier est fermé si le gain retombe de 40 % sous son plus haut
+  failFastSec: 6,            // sortie « échec rapide » : si après N s le trade n'a touché aucun TP et que le panier perd plus de failFastLossFrac × risque -> fermé (0 = off)
+  failFastLossFrac: 0.2,
   maxHoldLockedSec: 30,     // durée max quand le gain est verrouillé (laisse courir le runner)
   lockAtFrac: 0.6            // quand le gain atteint 60 % du TP, le SL est remonté (le gain est verrouillé) ; 0 = off
 };
@@ -104,7 +106,7 @@ function sanitizeConfig(src, cur) {
   int('minLegs', 2, 5); n('smallBalLimit', 0, 100000); n('smallBalRiskPct', 1, 60); int('calibMin', 10, 500); int('probBand', 2, 25);
   n('p2', 0.4, 0.95); n('p3', 0.4, 0.97); n('p4', 0.4, 0.98); n('p5', 0.4, 0.99);
   if (c.p3 <= c.p2) c.p3 = Math.min(0.97, c.p2 + 0.03); if (c.p4 <= c.p3) c.p4 = Math.min(0.98, c.p3 + 0.03); if (c.p5 <= c.p4) c.p5 = Math.min(0.99, c.p4 + 0.03);
-  n('basketArmFrac', 0.05, 1); n('basketGiveBackPct', 5, 95); int('maxHoldLockedSec', 3, 3600);
+  n('basketArmFrac', 0.05, 1); n('basketGiveBackPct', 5, 95); int('maxHoldLockedSec', 3, 3600); int('failFastSec', 0, 600); n('failFastLossFrac', 0.05, 1);
   n('maxDailyLossPct', 0, 90); n('maxWeeklyLossPct', 0, 90); int('maxConsecLosses', 0, 50);
   int('cooldownSec', 0, 3600); int('maxTradesPerMin', 1, 30); int('maxTradesPerDay', 0, 2000); int('maxLatencyMs', 100, 5000);
   int('sessionStartUtc', 0, 23); int('sessionEndUtc', 1, 24);
@@ -347,7 +349,7 @@ class UserScalper {
   _finish(name, st, reason) {
     const partial = st.gotClose && st.legsClosed < (st.sent || 1), net = r2(st.gotClose ? st.realized : (st.last || 0));
     let result;
-    if (st.closing) result = (st.closing === 'TEMPS' ? 'TEMPS' : st.closing === 'TRAIL' ? 'TRAIL' : 'MANUEL') + (net > 0 ? '+' : '-');
+    if (st.closing) result = (st.closing === 'TEMPS' ? 'TEMPS' : st.closing === 'TRAIL' ? 'TRAIL' : st.closing === 'FAIL' ? 'FAIL' : 'MANUEL') + (net > 0 ? '+' : '-');
     else result = net > 0 ? (st.tpHits > 0 ? 'TP' : 'LOCK') : 'SL';
     const win = net > 0, S = this.stats, SY = S.bySymbol[name] || (S.bySymbol[name] = { trades: 0, wins: 0, losses: 0, pnl: 0 }), hold = st.openedAt ? Math.max(0, (st.closedAt || this.now()) - st.openedAt) : 0;
     [S, SY].forEach(x => { x.trades++; if (win) x.wins++; else x.losses++; x.pnl = r2((x.pnl || 0) + net); });
@@ -427,6 +429,9 @@ class UserScalper {
         const netNow = r2((st.realized || 0) + st.last); if (netNow > (st.peakNet || 0)) st.peakNet = netNow;
         if (st.peakNet >= (st.riskUsd || 0) * cfg.basketArmFrac && st.peakNet > 0 && netNow <= st.peakNet * (1 - cfg.basketGiveBackPct / 100)) {
           this.log(`${name} : trailing panier (plus haut ${st.peakNet} $ → ${netNow} $) : tout fermé`); st.closing = 'TRAIL'; for (const p of mine) await this.closePos(p, 'trail'); continue;
+        }
+        if (cfg.failFastSec > 0 && !st.locked && !(st.tpHits > 0) && t - st.openedAt > cfg.failFastSec * 1000 && netNow < -(st.riskUsd || 0) * cfg.failFastLossFrac) {
+          this.log(`${name} : échec rapide (${netNow} $ après ${Math.round((t - st.openedAt) / 100) / 10} s) : tout fermé`); st.closing = 'FAIL'; for (const p of mine) await this.closePos(p, 'fail'); continue;
         }
         if (t - st.openedAt > (st.locked ? cfg.maxHoldLockedSec : cfg.maxHoldSec) * 1000) { st.closing = 'TEMPS'; for (const p of mine) await this.closePos(p, 'temps'); continue; }
         // verrouillage du gain : dès qu'un TP est touché, ou quand le gain atteint lockAtFrac du TP -> SL des positions restantes remonté
