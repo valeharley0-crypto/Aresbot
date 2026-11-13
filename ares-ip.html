@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ARES IP · Robot</title>
+<style>
+:root{--bg:#0b1220;--card:#121a2b;--line:#23304a;--tx:#e8edf7;--mu:#8a97b2;--ok:#2ebd85;--ko:#f6465d;--am:#ffc107}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.45 system-ui,sans-serif;padding:10px 10px 40px}
+h1{font-size:18px;margin:6px 0 10px}h2{font-size:15px;margin:0 0 8px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:12px}
+.row{display:flex;justify-content:space-between;gap:8px;padding:3px 0;border-bottom:1px dashed #1b2740}.row:last-child{border:0}
+.mu{color:var(--mu)}.ok{color:var(--ok)}.ko{color:var(--ko)}.am{color:var(--am)}
+button{background:#1d4ed8;color:#fff;border:0;border-radius:10px;padding:10px 14px;font-size:14px}button.s{background:#26334f}button.r{background:#b91c3c}
+input{background:#0b1220;color:var(--tx);border:1px solid var(--line);border-radius:8px;padding:8px;width:100%}
+table{width:100%;border-collapse:collapse;font-size:12.5px}th,td{padding:5px 4px;text-align:right;border-bottom:1px solid #1b2740}th:first-child,td:first-child{text-align:left}
+.sc{overflow-x:auto}.big{font-size:20px;font-weight:700}.tag{display:inline-block;padding:1px 8px;border-radius:99px;font-size:12px;background:#26334f}
+.bar{height:8px;background:#1b2740;border-radius:9px;overflow:hidden}.bar i{display:block;height:100%;background:var(--ok);width:0}
+.z{border-top:1px solid #1b2740;padding:8px 0;font-size:13px}.msg{padding:8px;border-radius:8px;background:#1b2740;margin:6px 0}
+</style>
+</head>
+<body>
+<h1>ARES IP · Robot XAUUSD</h1>
+
+<div class="card" id="keyBox" style="display:none">
+  <h2>Clé API</h2>
+  <input id="key" type="password" placeholder="Clé API (MENTOR_API_KEY)" autocomplete="off">
+  <div style="margin-top:8px"><button onclick="saveKey()">Enregistrer</button></div>
+</div>
+
+<div class="card">
+  <h2>Robot</h2>
+  <div class="row"><span class="mu">Auto Trade</span><b id="rAuto">–</b></div>
+  <div class="row"><span class="mu">Probabilités (backtest)</span><b id="rStats">–</b></div>
+  <div class="row"><span class="mu">Prix</span><b id="rPx">–</b></div>
+  <div style="display:flex;gap:8px;margin-top:10px"><button id="btnOn" onclick="setRobot(true)">Robot ON</button><button class="r" onclick="setRobot(false)">Robot OFF</button></div>
+  <div class="msg mu" id="rMsg" style="display:none"></div>
+</div>
+
+<div class="card">
+  <h2>Panel zone clé</h2>
+  <div id="pBest" class="mu">Chargement…</div>
+  <div id="pZones"></div>
+  <div id="pTrades"></div>
+</div>
+
+<div class="card">
+  <h2>Backtest 1 an (M5 · M15 · M30 · H1)</h2>
+  <div class="mu" style="margin-bottom:8px">Données réelles cTrader. Chaque TF a son résultat. « Robot » = zones à probabilité positive, sans contre-sens.</div>
+  <button onclick="runBt()">Lancer le backtest (1 an)</button>
+  <div class="bar" style="margin-top:10px"><i id="btBar"></i></div>
+  <div class="mu" id="btPhase" style="margin-top:4px"></div>
+  <div id="btOut"></div>
+</div>
+
+<script>
+var KEY = localStorage.getItem('ares_mentor_api_key') || '';
+var $ = function (i) { return document.getElementById(i); };
+function saveKey() { localStorage.setItem('ares_mentor_api_key', $('key').value.trim()); KEY = $('key').value.trim(); $('keyBox').style.display = 'none'; refresh(); }
+function api(path, method, body) {
+  var o = { method: method || 'GET', credentials: 'include', headers: {} };
+  if (KEY) o.headers['x-api-key'] = KEY;
+  if (o.method !== 'GET') { o.headers['Content-Type'] = 'application/json'; o.body = JSON.stringify(body || {}); }
+  return fetch(path, o).then(function (r) { return r.json().then(function (j) { if (r.status === 401) { $('keyBox').style.display = 'block'; } if (!r.ok || j.ok === false) throw new Error(j.error || ('Erreur ' + r.status)); return j; }); });
+}
+var TF = { 5: 'M5', 15: 'M15', 30: 'M30', 60: 'H1', 240: 'H4' }, ORDER = [60, 30, 15, 5];
+function f(x, d) { return x == null ? '–' : (typeof x === 'number' ? (Math.round(x * Math.pow(10, d == null ? 2 : d)) / Math.pow(10, d == null ? 2 : d)).toString() : x); }
+function cls(x) { return x > 0 ? 'ok' : x < 0 ? 'ko' : ''; }
+function msg(t, bad) { var e = $('rMsg'); e.style.display = t ? 'block' : 'none'; e.textContent = t || ''; e.className = 'msg ' + (bad ? 'ko' : 'mu'); }
+
+function setRobot(on) {
+  var p = on ? api('/api/mentor/active', 'POST', { active: 'NORMAL' }).then(function () { return api('/api/mentor/autotrade', 'POST', { autoTrade: true }); }) : api('/api/mentor/autotrade', 'POST', { autoTrade: false });
+  p.then(function () { msg(on ? 'Robot activé.' : 'Robot arrêté.'); refresh(); }).catch(function (e) { msg(e.message, true); });
+}
+
+function zoneLine(z) {
+  return '<div class="z"><b>' + (TF[z.tf] || z.tf) + ' · ' + (z.side === 'BUY' ? 'BUY' : 'SELL') + ' · grade ' + z.grade + ' (' + z.score + '/6)</b>' +
+    ' <span class="tag">proba ' + f(z.pWin * 100, 0) + '%</span> <span class="tag ' + cls(z.expR) + '">' + f(z.expR) + ' R</span><br>' +
+    '<span class="mu">Entrée</span> ' + f(z.entry) + ' · <span class="mu">SL</span> ' + f(z.sl) + ' (' + f(z.slPips, 0) + ' pips) · <span class="mu">TP</span> ' + f(z.tp) + ' · <span class="mu">RR</span> ' + f(z.rr) +
+    ' · <span class="mu">dist.</span> ' + f(z.dist) + ' $' + (z.note ? '<br><span class="mu">' + z.note + '</span>' : '') + '</div>';
+}
+function refresh() {
+  api('/api/mentor/config').then(function (j) { var c = j.config || {}; $('rAuto').textContent = c.autoTrade && c.active !== 'OFF' ? 'ON' : 'OFF'; $('rAuto').className = c.autoTrade && c.active !== 'OFF' ? 'ok' : 'ko'; }).catch(function () {});
+  api('/api/mentor/ip/panel').then(function (p) {
+    $('rStats').textContent = p.statsReady ? 'prêtes (' + (p.statsAt || '').slice(0, 10) + ')' : 'lancez le backtest';
+    $('rStats').className = p.statsReady ? 'ok' : 'am';
+    $('rPx').textContent = p.price ? f(p.price) : '–';
+    var b = p.best;
+    if (p.wait) $('pBest').innerHTML = '<div class="mu">' + p.wait + '</div>';
+    else if (!b) $('pBest').innerHTML = '<div class="mu">Aucune zone retenue pour le moment (probabilité, sens ou distance).' + (p.keyZone ? '' : ' Pas de zone clé H4.') + '</div>';
+    else $('pBest').innerHTML = '<div class="am"><b>ZONE RETENUE</b></div>' + zoneLine(b);
+    $('pZones').innerHTML = (p.zones || []).filter(function (z) { return !b || z.id !== b.id; }).slice(0, 6).map(zoneLine).join('') ? '<div class="mu" style="margin-top:8px">Autres zones (non prises)</div>' + (p.zones || []).filter(function (z) { return !b || z.id !== b.id; }).slice(0, 6).map(zoneLine).join('') : '';
+    var t = (p.limits || []).concat(p.live || []);
+    $('pTrades').innerHTML = t.length ? '<div class="mu" style="margin-top:8px">Ordres</div>' + t.map(function (x) { return '<div class="z">' + x.action + ' ' + (x.tf || '') + ' · limit ' + f(x.entry) + ' · SL ' + f(x.sl) + ' · TP ' + f(x.tp) + ' · <b>' + x.status + '</b></div>'; }).join('') : '';
+  }).catch(function (e) { $('pBest').innerHTML = '<div class="ko">' + e.message + '</div>'; });
+}
+
+function row(label, s) {
+  if (!s) return '';
+  return '<tr><td>' + label + '</td><td>' + s.trades + '</td><td class="ok">' + s.tp + '</td><td class="ko">' + s.sl + '</td><td class="' + (s.winRate != null && s.winRate > 25 ? 'ok' : 'ko') + '">' + (s.winRate == null ? '–' : f(s.winRate, 1) + '%') + '</td><td class="' + cls(s.netR) + '">' + f(s.netR) + '</td><td>' + (s.profitFactor == null ? '∞' : f(s.profitFactor)) + '</td><td>' + f(s.maxDrawdownR) + '</td><td>' + f(s.avgRR) + '</td></tr>';
+}
+var HEAD = '<tr><th>TF</th><th>Trades</th><th>TP</th><th>SL</th><th>Win</th><th>R net</th><th>PF</th><th>DD R</th><th>RR</th></tr>';
+function showBt(r) {
+  var h = '<h2 style="margin-top:14px">Chaque TF seul</h2><div class="sc"><table>' + HEAD + ORDER.map(function (tf) { return row(TF[tf], r.perTf[tf]); }).join('') + '</table></div>';
+  h += '<h2 style="margin-top:14px">Robot (zones retenues)</h2><div class="sc"><table>' + HEAD + ORDER.map(function (tf) { return row(TF[tf], r.robot.byTf && r.robot.byTf[tf]); }).join('') + row('<b>TOTAL</b>', r.robot) + '</table></div>';
+  h += '<div class="mu" style="margin-top:6px">Win % vert si &gt; 25 % (seuil pour RR 3). RR = moyen choisi par le robot. R net après spread + slippage. Total : ' + f(r.robot.pnlUsd) + ' $ pour ' + f(r.riskUsd, 0) + ' $ risqués par trade.</div>';
+  var m = r.robot.monthly || [];
+  if (m.length) h += '<h2 style="margin-top:14px">Robot par mois</h2><div class="sc"><table><tr><th>Mois</th><th>Trades</th><th>TP</th><th>SL</th><th>R net</th></tr>' + m.map(function (x) { return '<tr><td>' + x.month + '</td><td>' + x.trades + '</td><td class="ok">' + x.tp + '</td><td class="ko">' + x.sl + '</td><td class="' + cls(x.netR) + '">' + f(x.netR) + '</td></tr>'; }).join('') + '</table></div>';
+  var pr = r.probs ? Object.keys(r.probs).map(function (k) { return r.probs[k]; }) : [];
+  if (pr.length) h += '<h2 style="margin-top:14px">Probabilités par TF et grade</h2><div class="sc"><table><tr><th>TF</th><th>Grade</th><th>n</th><th>Proba</th><th>Espér. R</th><th>Pris</th></tr>' + pr.map(function (x) { return '<tr><td>' + (TF[x.tf] || x.tf) + '</td><td>' + x.grade + '</td><td>' + x.n + '</td><td>' + f(x.pWin * 100, 0) + '%</td><td class="' + cls(x.expR) + '">' + f(x.expR) + '</td><td>' + (x.ok ? '<span class="ok">oui</span>' : '<span class="mu">non</span>') + '</td></tr>'; }).join('') + '</table></div>';
+  h += '<div class="mu" style="margin-top:10px">' + (r.notes || []).join('<br>') + '<br>Aucune garantie : le passé ne garantit pas le futur.</div>';
+  $('btOut').innerHTML = h;
+}
+var btTimer = null;
+function runBt() {
+  $('btOut').innerHTML = ''; $('btBar').style.width = '2%'; $('btPhase').textContent = 'Démarrage…';
+  api('/api/mentor/ip/backtest', 'POST', { risk: 10 }).then(function (j) {
+    clearInterval(btTimer);
+    btTimer = setInterval(function () {
+      api('/api/mentor/ip/backtest/' + j.id).then(function (s) {
+        $('btBar').style.width = Math.round((s.progress || 0) * 100) + '%'; $('btPhase').textContent = s.phase || '';
+        if (s.status === 'done') { clearInterval(btTimer); $('btPhase').textContent = 'Terminé.'; showBt(s.result); refresh(); }
+        if (s.status === 'error') { clearInterval(btTimer); $('btPhase').innerHTML = '<span class="ko">' + (s.error || 'erreur') + '</span>'; }
+      }).catch(function (e) { clearInterval(btTimer); $('btPhase').innerHTML = '<span class="ko">' + e.message + '</span>'; });
+    }, 2500);
+  }).catch(function (e) { $('btPhase').innerHTML = '<span class="ko">' + e.message + '</span>'; $('btBar').style.width = '0'; });
+}
+refresh(); setInterval(refresh, 8000);
+</script>
+</body>
+</html>
