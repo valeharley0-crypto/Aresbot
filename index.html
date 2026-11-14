@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1220">
+<title>ARES IP · Robot XAUUSD</title>
+<style>
+:root{--bg:#0b1220;--card:#121a2b;--line:#23304a;--tx:#e8edf7;--mu:#8a97b2;--ok:#2ebd85;--ko:#f6465d;--am:#ffc107;--bl:#1d4ed8}
+*{box-sizing:border-box}html,body{margin:0}body{background:var(--bg);color:var(--tx);font:14px/1.45 system-ui,sans-serif;padding:10px 10px 84px}
+h1{font-size:18px;margin:4px 0 10px;display:flex;justify-content:space-between;align-items:center}h2{font-size:15px;margin:0 0 8px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:12px}
+.row{display:flex;justify-content:space-between;gap:8px;padding:4px 0;border-bottom:1px dashed #1b2740}.row:last-child{border:0}
+.mu{color:var(--mu)}.ok{color:var(--ok)}.ko{color:var(--ko)}.am{color:var(--am)}.big{font-size:19px;font-weight:700}
+button{background:var(--bl);color:#fff;border:0;border-radius:10px;padding:10px 14px;font-size:14px}button.s{background:#26334f}button.r{background:#b91c3c}button.g{background:#15803d}
+input,select{background:#0b1220;color:var(--tx);border:1px solid var(--line);border-radius:8px;padding:8px;width:100%;font-size:14px}
+label{display:block;margin:8px 0 3px;color:var(--mu);font-size:12.5px}
+table{width:100%;border-collapse:collapse;font-size:12.5px}th,td{padding:5px 4px;text-align:right;border-bottom:1px solid #1b2740}th:first-child,td:first-child{text-align:left}.sc{overflow-x:auto}
+.tag{display:inline-block;padding:1px 8px;border-radius:99px;font-size:12px;background:#26334f;margin-right:4px}
+.bar{height:8px;background:#1b2740;border-radius:9px;overflow:hidden}.bar i{display:block;height:100%;background:var(--ok);width:0}
+.z{border-top:1px solid #1b2740;padding:8px 0;font-size:13px}.msg{padding:8px;border-radius:8px;background:#1b2740;margin:8px 0}
+nav{position:fixed;left:0;right:0;bottom:0;background:#0e1626;border-top:1px solid var(--line);display:flex;padding-bottom:env(safe-area-inset-bottom)}
+nav button{flex:1;background:none;border-radius:0;padding:12px 2px;font-size:12.5px;color:var(--mu)}nav button.on{color:#fff;border-top:2px solid var(--bl)}
+.tab{display:none}.tab.on{display:block}.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.gap{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+</style>
+</head>
+<body>
+<h1><span>ARES IP · XAUUSD</span><span class="tag" id="topSt">–</span></h1>
+
+<div class="card" id="keyBox" style="display:none">
+  <h2>Connexion</h2>
+  <label>Clé du serveur (MENTOR_API_KEY)</label>
+  <input id="key" type="password" autocomplete="off" placeholder="Clé API">
+  <div class="gap"><button onclick="saveKey()">Entrer</button></div>
+</div>
+<div class="msg" id="gMsg" style="display:none"></div>
+
+<!-- ============ ROBOT ============ -->
+<section class="tab on" id="t_robot">
+  <div class="card">
+    <h2>Robot</h2>
+    <div class="row"><span class="mu">Auto Trade</span><b id="rAuto">–</b></div>
+    <div class="row"><span class="mu">État</span><b id="rState">–</b></div>
+    <div class="row"><span class="mu">Raison</span><span id="rReason" style="text-align:right">–</span></div>
+    <div class="row"><span class="mu">Probabilités (backtest)</span><b id="rStats">–</b></div>
+    <div class="row"><span class="mu">Prix XAUUSD</span><b id="rPx">–</b></div>
+    <div class="gap"><button class="g" onclick="setRobot(true)">Robot ON</button><button class="s" onclick="setRobot(false)">Robot OFF</button><button class="r" onclick="stopAll()">Arrêt d'urgence</button></div>
+  </div>
+  <div class="card">
+    <h2>Compte</h2>
+    <div class="row"><span class="mu">Solde</span><b id="aBal">–</b></div>
+    <div class="row"><span class="mu">Equity</span><b id="aEq">–</b></div>
+    <div class="row"><span class="mu">P/L du jour</span><b id="aPl">–</b></div>
+    <div class="row"><span class="mu">Trades aujourd'hui</span><b id="aTr">–</b></div>
+  </div>
+  <div class="card">
+    <h2>cTrader</h2>
+    <div class="row"><span class="mu">Connexion</span><b id="cSt">–</b></div>
+    <div class="row"><span class="mu">Compte</span><b id="cAcc">–</b></div>
+    <div id="cAccounts"></div>
+    <div class="gap"><button onclick="ct('connect')">Connecter</button><button class="s" onclick="ct('reconnect')">Reconnecter</button><button class="s" onclick="ct('disconnect')">Déconnecter</button></div>
+  </div>
+</section>
+
+<!-- ============ ZONE CLÉ ============ -->
+<section class="tab" id="t_zone">
+  <div class="card">
+    <h2>Zone clé retenue</h2>
+    <div class="mu" style="margin-bottom:6px">Seule la zone à forte probabilité ET la plus proche du prix est prise : entrée, SL, TP ci-dessous.</div>
+    <div id="zBest" class="mu">Chargement…</div>
+  </div>
+  <div class="card"><h2>Autres zones (non prises)</h2><div id="zOthers" class="mu">–</div></div>
+  <div class="card"><h2>Ordres et trade</h2><div id="zOrders" class="mu">–</div></div>
+</section>
+
+<!-- ============ BACKTEST ============ -->
+<section class="tab" id="t_bt">
+  <div class="card">
+    <h2>Backtest 1 an (M5 · M15 · M30 · H1)</h2>
+    <div class="mu" style="margin-bottom:8px">Historique réel cTrader. Chaque TF a son résultat. « Robot » = zones à probabilité positive, sans contre-sens, avec la confluence VRZ apprise.</div>
+    <div class="gap" style="margin-top:0"><button onclick="runBt()">Lancer le backtest (1 an)</button></div>
+    <div class="bar" style="margin-top:10px"><i id="btBar"></i></div>
+    <div class="mu" id="btPhase" style="margin-top:4px"></div>
+  </div>
+  <div id="btOut"></div>
+</section>
+
+<!-- ============ JOURNAL ============ -->
+<section class="tab" id="t_log">
+  <div class="card"><h2>Trades</h2><div class="sc" id="jTrades" class="mu">–</div></div>
+  <div class="card"><h2>Journal du robot</h2><div id="jLogs" class="mu">–</div></div>
+</section>
+
+<!-- ============ RÉGLAGES ============ -->
+<section class="tab" id="t_set">
+  <div class="card">
+    <h2>Risque</h2>
+    <label>Risque par trade (% du solde)</label><input id="sRisk" type="number" step="0.05">
+    <label>Perte max par jour (points-or : 100 = 1 $)</label><input id="sDaily" type="number" step="10">
+    <label>Nombre max de pertes de suite</label><input id="sConsec" type="number" step="1">
+  </div>
+  <div class="card">
+    <h2>Stratégie Ares IP</h2>
+    <div class="grid">
+      <div><label>SL min ($ · 5 = 50 pips)</label><input id="sMinSL" type="number" step="0.5"></div>
+      <div><label>SL max ($ · 10 = 100 pips)</label><input id="sMaxSL" type="number" step="0.5"></div>
+      <div><label>RR min</label><input id="sMinRR" type="number" step="0.1"></div>
+      <div><label>RR max</label><input id="sMaxRR" type="number" step="0.1"></div>
+      <div><label>Distance max au limit ($)</label><input id="sDist" type="number" step="0.5"></div>
+      <div><label>Espérance min (R)</label><input id="sExp" type="number" step="0.05"></div>
+    </div>
+    <label>Zone clé H4</label><select id="sKey"><option value="true">Obligatoire</option><option value="false">Non</option></select>
+    <label>VRZ (pic de volume)</label><select id="sVrz"><option value="LEARN">Apprise par le backtest (conseillé)</option><option value="REQUIRE">Obligatoire</option><option value="OFF">Ignorée</option></select>
+    <label>Niveau d'entrée</label><select id="sEntry"><option value="MID">Milieu de la zone</option><option value="PROXIMAL">Bord proche</option></select>
+    <div class="gap"><button onclick="saveSet()">Enregistrer</button></div>
+    <div class="mu" style="margin-top:8px">Après un changement de stratégie, relancez le backtest pour recalculer les probabilités.</div>
+  </div>
+</section>
+
+<nav>
+  <button class="on" data-t="robot">Robot</button><button data-t="zone">Zone clé</button><button data-t="bt">Backtest</button><button data-t="log">Journal</button><button data-t="set">Réglages</button>
+</nav>
+
+<script>
+var BASE = (window.ARES_API_BASE || '').replace(/\/$/, '');
+var KEY = ''; try { KEY = localStorage.getItem('ares_mentor_api_key') || ''; } catch (e) {}
+var $ = function (i) { return document.getElementById(i); };
+var TF = { 5: 'M5', 15: 'M15', 30: 'M30', 60: 'H1', 240: 'H4' }, ORDER = [60, 30, 15, 5], cur = 'robot', setLoaded = false;
+function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+function f(x, d) { if (x == null || !isFinite(x)) return '–'; var k = Math.pow(10, d == null ? 2 : d); return String(Math.round(x * k) / k); }
+function cls(x) { return x > 0 ? 'ok' : x < 0 ? 'ko' : ''; }
+function gmsg(t, bad) { var e = $('gMsg'); e.style.display = t ? 'block' : 'none'; e.textContent = t || ''; e.className = 'msg ' + (bad ? 'ko' : 'mu'); }
+function saveKey() { KEY = $('key').value.trim(); try { localStorage.setItem('ares_mentor_api_key', KEY); } catch (e) {} $('keyBox').style.display = 'none'; refresh(true); }
+function api(path, method, body) {
+  var o = { method: method || 'GET', credentials: 'include', headers: {} };
+  if (KEY) o.headers['x-api-key'] = KEY;
+  if (o.method !== 'GET') { o.headers['Content-Type'] = 'application/json'; o.body = JSON.stringify(body || {}); }
+  return fetch(BASE + path, o).then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) {
+    if (r.status === 401 || r.status === 403) { $('keyBox').style.display = 'block'; throw new Error('Clé API requise ou refusée'); }
+    if (!r.ok || j.ok === false) throw new Error(j.error || ('Erreur ' + r.status)); return j; }); });
+}
+document.querySelectorAll('nav button').forEach(function (b) { b.onclick = function () { show(b.getAttribute('data-t')); }; });
+function show(t) {
+  cur = t; document.querySelectorAll('nav button').forEach(function (b) { b.className = b.getAttribute('data-t') === t ? 'on' : ''; });
+  document.querySelectorAll('.tab').forEach(function (s) { s.className = 'tab' + (s.id === 't_' + t ? ' on' : ''); });
+  if (t === 'set' && !setLoaded) loadSet(); refresh(true);
+}
+
+/* ---------- Robot ---------- */
+function setRobot(on) {
+  var p = on ? api('/api/mentor/active', 'POST', { active: 'NORMAL' }).then(function () { return api('/api/mentor/autotrade', 'POST', { autoTrade: true }); }) : api('/api/mentor/autotrade', 'POST', { autoTrade: false });
+  p.then(function () { gmsg(on ? 'Robot activé.' : 'Robot arrêté.'); refresh(true); }).catch(function (e) { gmsg(e.message, true); });
+}
+function stopAll() { if (!confirm('Arrêt d\'urgence : bloquer le robot et annuler les ordres ?')) return; api('/api/mentor/emergency-stop', 'POST', {}).then(function () { gmsg('Arrêt d\'urgence envoyé.'); refresh(true); }).catch(function (e) { gmsg(e.message, true); }); }
+function ct(a) {
+  if (a === 'connect') return api('/api/ctrader/connect-url').then(function (j) { window.location.href = j.url; }).catch(function (e) { gmsg(e.message, true); });
+  api('/api/ctrader/' + a, 'POST', {}).then(function () { gmsg('cTrader : ' + a + ' effectué.'); refresh(true); }).catch(function (e) { gmsg(e.message, true); });
+}
+function pickAcc(id) { api('/api/ctrader/account', 'POST', { accountId: String(id) }).then(function () { gmsg('Compte sélectionné.'); refresh(true); }).catch(function (e) { gmsg(e.message, true); }); }
+function loadRobot() {
+  api('/api/mentor/status').then(function (s) {
+    var on = s.autoTrade && s.active !== 'OFF';
+    $('rAuto').textContent = on ? 'ON' : 'OFF'; $('rAuto').className = on ? 'ok' : 'ko';
+    $('topSt').textContent = on ? 'ROBOT ON' : 'ROBOT OFF'; $('topSt').style.background = on ? '#14532d' : '#26334f';
+    $('rState').textContent = s.status + (s.sub ? ' · ' + s.sub : ''); $('rReason').textContent = s.reason || '–';
+    $('aBal').textContent = f(s.balance) + ' $'; $('aEq').textContent = f(s.equity) + ' $';
+    $('aPl').textContent = f(s.dailyPL) + ' $'; $('aPl').className = cls(s.dailyPL);
+    $('aTr').textContent = (s.tradesToday || 0) + ' (' + (s.wins || 0) + ' gagnés · ' + (s.losses || 0) + ' perdus)';
+    var c = s.ctrader || {}; $('cSt').textContent = c.status || '–'; $('cSt').className = c.status === 'CONNECTED' ? 'ok' : 'ko'; $('cAcc').textContent = c.accountId ? c.accountId + (c.isLive ? ' (réel)' : ' (démo)') : '–';
+    var acc = c.accounts || []; $('cAccounts').innerHTML = acc.length > 1 ? acc.map(function (a) { var id = a.accountId || a.ctidTraderAccountId || a.id; return '<div class="row"><span>' + esc(id) + (a.isLive ? ' · réel' : ' · démo') + '</span><button class="s" onclick="pickAcc(\'' + esc(id) + '\')">Choisir</button></div>'; }).join('') : '';
+  }).catch(function (e) { gmsg(e.message, true); });
+}
+
+/* ---------- Zone clé ---------- */
+function zoneBox(z, kz, big) {
+  var k = kz && kz[z.side];
+  return '<div class="' + (big ? '' : 'z') + '"><div class="' + (big ? 'big ' : '') + (z.side === 'BUY' ? 'ok' : 'ko') + '">' + (z.side === 'BUY' ? 'BUY LIMIT' : 'SELL LIMIT') + ' · ' + (TF[z.tf] || z.tf) + ' · grade ' + esc(z.grade) + ' (' + z.score + '/6)</div>' +
+    '<div style="margin:4px 0"><span class="tag">proba ' + f(z.pWin * 100, 0) + '%</span><span class="tag ' + cls(z.expR) + '">' + f(z.expR) + ' R</span><span class="tag">' + (z.vrz ? 'VRZ ✓ ' + z.vrzScore + '/5' : 'sans VRZ') + '</span>' + (z.keyOk ? '<span class="tag">zone clé H4 ✓</span>' : '') + '</div>' +
+    '<div class="row"><span class="mu">Prix d\'entrée</span><b>' + f(z.entry) + '</b></div><div class="row"><span class="mu">Stop Loss</span><b class="ko">' + f(z.sl) + ' (' + f(z.slPips, 0) + ' pips)</b></div><div class="row"><span class="mu">Take Profit</span><b class="ok">' + f(z.tp) + '</b></div>' +
+    '<div class="row"><span class="mu">RR</span><b>' + f(z.rr) + '</b></div><div class="row"><span class="mu">Distance au prix</span><b>' + f(z.dist) + ' $</b></div>' + (k ? '<div class="row"><span class="mu">Zone clé H4</span><span>' + f(k.bot) + ' – ' + f(k.top) + '</span></div>' : '') +
+    (z.note ? '<div class="mu" style="margin-top:4px">' + esc(z.note) + '</div>' : '') + '</div>';
+}
+function loadZone() {
+  api('/api/mentor/ip/panel').then(function (p) {
+    $('rStats').textContent = p.statsReady ? 'prêtes (' + (p.statsAt || '').slice(0, 10) + ')' : 'lancez le backtest'; $('rStats').className = p.statsReady ? 'ok' : 'am';
+    $('rPx').textContent = p.price ? f(p.price) : '–';
+    var b = p.best;
+    if (p.wait) $('zBest').innerHTML = esc(p.wait);
+    else if (!p.statsReady) $('zBest').innerHTML = '<span class="am">Lancez d\'abord le backtest : sans probabilités, le robot ne prend aucun ordre.</span>';
+    else if (!b) $('zBest').innerHTML = 'Aucune zone retenue pour le moment (probabilité, sens ou distance).';
+    else $('zBest').innerHTML = zoneBox(b, p.keyZone, true);
+    var others = (p.zones || []).filter(function (z) { return !b || z.id !== b.id; });
+    $('zOthers').innerHTML = others.length ? others.slice(0, 6).map(function (z) { return zoneBox(z, p.keyZone, false); }).join('') : 'Aucune.';
+    var t = (p.limits || []).concat(p.live || []);
+    $('zOrders').innerHTML = t.length ? t.map(function (x) { return '<div class="z"><b>' + esc(x.action) + ' ' + esc(x.tf || '') + '</b> · limit ' + f(x.entry) + ' · SL ' + f(x.sl) + ' · TP ' + f(x.tp) + ' · <b>' + esc(x.status) + '</b>' + (x.pnlMoney != null ? ' · ' + f(x.pnlMoney) + ' $' : '') + '</div>'; }).join('') : 'Aucun ordre en cours.';
+  }).catch(function (e) { $('zBest').textContent = e.message; });
+}
+
+/* ---------- Backtest ---------- */
+var HEAD = '<tr><th>TF</th><th>Trades</th><th>TP</th><th>SL</th><th>Win</th><th>R net</th><th>PF</th><th>DD R</th><th>RR</th></tr>';
+function row(label, s) { if (!s) return ''; return '<tr><td>' + label + '</td><td>' + s.trades + '</td><td class="ok">' + s.tp + '</td><td class="ko">' + s.sl + '</td><td class="' + (s.winRate != null && s.winRate > 25 ? 'ok' : 'ko') + '">' + (s.winRate == null ? '–' : f(s.winRate, 1) + '%') + '</td><td class="' + cls(s.netR) + '">' + f(s.netR) + '</td><td>' + (s.profitFactor == null ? '∞' : f(s.profitFactor)) + '</td><td>' + f(s.maxDrawdownR) + '</td><td>' + f(s.avgRR) + '</td></tr>'; }
+function showBt(r) {
+  var h = diagBox(r) + '<div class="card"><h2>Chaque TF seul</h2><div class="sc"><table>' + HEAD + ORDER.map(function (tf) { return row(TF[tf], r.perTf[tf]); }).join('') + '</table></div></div>';
+  h += '<div class="card"><h2>Robot (zones retenues)</h2><div class="sc"><table>' + HEAD + ORDER.map(function (tf) { return row(TF[tf], r.robot.byTf && r.robot.byTf[tf]); }).join('') + row('<b>TOTAL</b>', r.robot) + '</table></div><div class="mu" style="margin-top:6px">Win % vert si &gt; 25 % (seuil pour RR 3). RR = moyen choisi par le robot. R net après spread + slippage. Total : ' + f(r.robot.pnlUsd) + ' $ pour ' + f(r.riskUsd, 0) + ' $ risqués par trade.</div></div>';
+  var m = r.robot.monthly || [];
+  if (m.length) h += '<div class="card"><h2>Robot par mois</h2><div class="sc"><table><tr><th>Mois</th><th>Trades</th><th>TP</th><th>SL</th><th>R net</th></tr>' + m.map(function (x) { return '<tr><td>' + x.month + '</td><td>' + x.trades + '</td><td class="ok">' + x.tp + '</td><td class="ko">' + x.sl + '</td><td class="' + cls(x.netR) + '">' + f(x.netR) + '</td></tr>'; }).join('') + '</table></div></div>';
+  var pr = r.probs ? Object.keys(r.probs).map(function (k) { return r.probs[k]; }) : [];
+  pr.sort(function (a, b) { return b.expR - a.expR; });
+  if (pr.length) h += '<div class="card"><h2>Probabilités (TF · grade · VRZ)</h2><div class="sc"><table><tr><th>TF</th><th>Grade</th><th>VRZ</th><th>n</th><th>Proba</th><th>Espér. R</th><th>Pris</th></tr>' + pr.map(function (x) { return '<tr><td>' + (TF[x.tf] || x.tf) + '</td><td>' + esc(x.grade) + '</td><td>' + (x.vrz ? '✓' : '–') + '</td><td>' + x.n + '</td><td>' + f(x.pWin * 100, 0) + '%</td><td class="' + cls(x.expR) + '">' + f(x.expR) + '</td><td>' + (x.ok ? '<span class="ok">oui</span>' : '<span class="mu">non</span>') + '</td></tr>'; }).join('') + '</table></div></div>';
+  h += '<div class="mu" style="padding:0 4px">Probabilité apprise en walk-forward : chaque décision utilise seulement les résultats déjà terminés. Aucune garantie : le passé ne garantit pas le futur.</div>';
+  $('btOut').innerHTML = h;
+}
+function diagBox(r) {
+  var d = r.diag; if (!d) return '';
+  var rows = ORDER.map(function (tf) { return '<tr><td>' + TF[tf] + '</td><td>' + (d.zones[tf] || 0) + '</td><td>' + (d.slTooWide[tf] || 0) + '</td><td>' + (d.keyOk[tf] || 0) + '</td><td>' + (d.valid[tf] || 0) + '</td></tr>'; }).join('');
+  var bars = (r.data || []).map(function (x) { return x.tf + ' ' + x.bars; }).join(' · ');
+  return '<div class="card"><h2>Diagnostic</h2><div class="sc"><table><tr><th>TF</th><th>Zones</th><th>SL &gt; max</th><th>Avec zone clé</th><th>Utilisables</th></tr>' + rows + '</table></div><div class="mu" style="margin-top:6px">Zones clés H4 : ' + (d.keyZones || 0) + ' · Bougies : ' + esc(bars) + '</div></div>';
+}
+var btTimer = null;
+function runBt() {
+  $('btOut').innerHTML = ''; $('btBar').style.width = '2%'; $('btPhase').textContent = 'Démarrage…';
+  api('/api/mentor/ip/backtest', 'POST', { risk: 10 }).then(function (j) {
+    clearInterval(btTimer);
+    btTimer = setInterval(function () {
+      api('/api/mentor/ip/backtest/' + j.id).then(function (s) {
+        $('btBar').style.width = Math.round((s.progress || 0) * 100) + '%'; $('btPhase').textContent = s.phase || '';
+        if (s.status === 'done') { clearInterval(btTimer); $('btPhase').textContent = 'Terminé.'; showBt(s.result); }
+        if (s.status === 'error') { clearInterval(btTimer); $('btPhase').innerHTML = '<span class="ko">' + esc(s.error || 'erreur') + '</span>'; }
+      }).catch(function (e) { clearInterval(btTimer); $('btPhase').innerHTML = '<span class="ko">' + esc(e.message) + '</span>'; });
+    }, 2500);
+  }).catch(function (e) { $('btPhase').innerHTML = '<span class="ko">' + esc(e.message) + '</span>'; $('btBar').style.width = '0'; });
+}
+
+/* ---------- Journal ---------- */
+function loadLog() {
+  api('/api/mentor/trades?n=40').then(function (j) {
+    var t = (j.trades || []).slice().reverse();
+    $('jTrades').innerHTML = t.length ? '<table><tr><th>Date</th><th>Sens</th><th>Entrée</th><th>SL</th><th>TP</th><th>État</th><th>$</th></tr>' + t.map(function (x) { var p = x.result && x.result.pnlMoney != null ? x.result.pnlMoney : null; return '<tr><td>' + esc(String(x.ts || '').slice(5, 16).replace('T', ' ')) + '</td><td class="' + (x.action === 'BUY' ? 'ok' : 'ko') + '">' + esc(x.action) + '</td><td>' + f(x.entry) + '</td><td>' + f(x.sl) + '</td><td>' + f(x.tp1 != null ? x.tp1 : x.tp) + '</td><td>' + esc(x.status) + '</td><td class="' + cls(p) + '">' + (p == null ? '–' : f(p)) + '</td></tr>'; }).join('') + '</table>' : 'Aucun trade.';
+  }).catch(function (e) { $('jTrades').textContent = e.message; });
+  api('/api/mentor/log').then(function (j) {
+    var l = (j.logs || j.log || []).slice(-40).reverse();
+    $('jLogs').innerHTML = l.length ? l.map(function (x) { return '<div class="z"><span class="mu">' + esc(String(x.timestamp || '').slice(5, 19).replace('T', ' ')) + '</span> <b>' + esc(x.decision) + '</b> ' + esc(x.reason) + '</div>'; }).join('') : 'Journal vide.';
+  }).catch(function (e) { $('jLogs').textContent = e.message; });
+}
+
+/* ---------- Réglages ---------- */
+function loadSet() {
+  api('/api/mentor/config').then(function (j) {
+    var c = j.config || {}, ip = c.ip || {}, nm = c.normal || {}, rk = c.risk || {};
+    $('sRisk').value = c.riskPerTradePct; $('sDaily').value = nm.dailyLossPoints; $('sConsec').value = rk.maxConsecutiveLosses;
+    $('sMinSL').value = ip.minSL; $('sMaxSL').value = ip.maxSL; $('sMinRR').value = ip.minRR; $('sMaxRR').value = ip.maxRR; $('sDist').value = ip.maxDist; $('sExp').value = ip.minExp;
+    $('sKey').value = String(ip.useKey !== false); $('sVrz').value = ip.vrzMode || 'LEARN'; $('sEntry').value = ip.entryMode || 'MID'; setLoaded = true;
+  }).catch(function (e) { gmsg(e.message, true); });
+}
+function saveSet() {
+  var n = function (i) { return parseFloat($(i).value); };
+  api('/api/mentor/config', 'POST', { riskPerTradePct: n('sRisk'), normal: { dailyLossPoints: n('sDaily') }, risk: { maxConsecutiveLosses: n('sConsec') },
+    ip: { minSL: n('sMinSL'), maxSL: n('sMaxSL'), minRR: n('sMinRR'), maxRR: n('sMaxRR'), maxDist: n('sDist'), minExp: n('sExp'), useKey: $('sKey').value === 'true', vrzMode: $('sVrz').value, entryMode: $('sEntry').value } })
+    .then(function () { gmsg('Réglages enregistrés. Relancez le backtest pour recalculer les probabilités.'); setLoaded = false; loadSet(); }).catch(function (e) { gmsg(e.message, true); });
+}
+
+function refresh(force) {
+  if (!KEY && !force) { try { KEY = localStorage.getItem('ares_mentor_api_key') || ''; } catch (e) {} }
+  if (cur === 'robot') { loadRobot(); loadZone(); } else if (cur === 'zone') loadZone(); else if (cur === 'log') loadLog();
+}
+(function () { var q = new URLSearchParams(location.search); if (q.get('ctrader') === 'ok') gmsg('cTrader connecté.'); else if (q.get('ctrader')) gmsg('cTrader : ' + (q.get('why') || q.get('ctrader')), true); if (q.get('ctrader')) history.replaceState(null, '', location.pathname); })();
+if (!KEY) $('keyBox').style.display = 'block';
+refresh(true); setInterval(function () { refresh(false); }, 8000);
+</script>
+</body>
+</html>
