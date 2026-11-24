@@ -1,0 +1,17 @@
+{
+  "name": "smcrt-bot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SMCRT : H4 CRT, M15 CHoCH, M5 entrée, exécution cTrader Open API",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ws": "^8.17.1"
+  }
+}

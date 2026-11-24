@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SMCRT</title>
+<style>
+:root{--bg:#0f1115;--card:#181b22;--tx:#e8eaf0;--mut:#8b91a1;--ln:#262a35;--ac:#d4a72c;--ok:#2fbf71;--ko:#e5484d;--bl:#4c8dff;color-scheme:dark}
+@media (prefers-color-scheme:light){:root:not([data-theme=dark]){--bg:#f4f5f8;--card:#fff;--tx:#161922;--mut:#667085;--ln:#e3e6ee;--ac:#9a7410;--ok:#16874a;--ko:#c9252b;--bl:#2563eb;color-scheme:light}}
+*{box-sizing:border-box}html,body{margin:0}
+body{background:var(--bg);color:var(--tx);font:15px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:env(safe-area-inset-top,0px) 12px calc(24px + env(safe-area-inset-bottom,0px))}
+h1{font-size:20px;margin:14px 0 2px;letter-spacing:.5px}h1 span{color:var(--ac)}
+h2{font-size:13px;color:var(--mut);text-transform:uppercase;letter-spacing:.8px;margin:20px 0 8px}
+.sub{color:var(--mut);font-size:12px}
+.card{background:var(--card);border:1px solid var(--ln);border-radius:12px;padding:12px;margin-bottom:10px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.sp{justify-content:space-between}
+input{background:var(--bg);color:var(--tx);border:1px solid var(--ln);border-radius:8px;padding:9px;font-size:14px;min-width:0;flex:1}
+button{background:var(--ac);color:#111;border:0;border-radius:8px;padding:9px 12px;font-weight:600;font-size:14px}
+button.g{background:transparent;color:var(--tx);border:1px solid var(--ln)}button.r{background:var(--ko);color:#fff}button:disabled{opacity:.5}
+.tag{font-size:11px;font-weight:700;padding:3px 8px;border-radius:99px;border:1px solid var(--ln);color:var(--mut)}
+.tag.on{color:var(--ok);border-color:var(--ok)}.tag.off{color:var(--ko);border-color:var(--ko)}.tag.w{color:var(--bl);border-color:var(--bl)}.tag.a{color:var(--ac);border-color:var(--ac)}
+.k{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:8px}.k div{background:var(--bg);border-radius:8px;padding:6px 8px}.k small{display:block;color:var(--mut);font-size:11px}.k b{font-size:14px}
+.buy{color:var(--ok)}.sell{color:var(--ko)}.pos{color:var(--ok)}.neg{color:var(--ko)}
+table{width:100%;border-collapse:collapse;font-size:13px}th,td{padding:6px 4px;text-align:right;border-bottom:1px solid var(--ln)}th:first-child,td:first-child{text-align:left}th{color:var(--mut);font-weight:600}
+.wrap{overflow-x:auto}.log{font:12px/1.5 ui-monospace,Menlo,monospace;color:var(--mut);max-height:200px;overflow:auto}
+.bar{height:6px;background:var(--bg);border-radius:9px;overflow:hidden;margin-top:8px}.bar i{display:block;height:100%;background:var(--ac);width:0}
+</style>
+</head>
+<body>
+<h1>SM<span>CRT</span></h1>
+<div class="sub">H4 CRT → M15 CHoCH → M5 entrée · Gold · EURUSD · V75 · V100</div>
+
+<div class="card" style="margin-top:12px">
+  <div class="row"><input id="key" type="password" placeholder="Clé d’accès (MENTOR_API_KEY)" autocomplete="off"><button id="save">OK</button></div>
+</div>
+
+<div class="card">
+  <div class="row sp"><span id="state" class="tag">…</span><span class="sub" id="bal"></span></div>
+  <div class="row" style="margin-top:10px">
+    <button id="toggle">Démarrer</button>
+    <button class="g" id="conn">Connecter cTrader</button>
+    <button class="r" id="stop">Arrêt d’urgence</button>
+  </div>
+  <div class="row" style="margin-top:8px"><input id="acc" inputmode="numeric" placeholder="ID du compte cTrader"><button class="g" id="accb">Choisir</button></div>
+  <div class="row" style="margin-top:8px"><label class="sub"><input type="checkbox" id="live" style="flex:none"> Exécution réelle des ordres (décocher = PAPER, aucun ordre envoyé)</label></div>
+  <div class="k"><div><small>P/L du jour</small><b id="dpl">—</b></div><div><small>Risque ouvert</small><b id="exp">—</b></div><div><small>Trades</small><b id="ttr">—</b></div></div>
+</div>
+
+<h2>Paires · trades</h2>
+<div id="pairs"></div>
+
+<h2>P/L · winrate par paire</h2>
+<div class="card wrap"><table id="stats"></table></div>
+
+<h2>Backtest</h2>
+<div class="card">
+  <div class="row"><select id="months" style="background:var(--bg);color:var(--tx);border:1px solid var(--ln);border-radius:8px;padding:9px"><option value="12">12 mois</option><option value="6">6 mois</option><option value="3">3 mois</option><option value="1">1 mois</option></select><button id="bt">Lancer le backtest</button></div>
+  <div class="bar"><i id="btp"></i></div><div class="sub" id="btm" style="margin-top:6px"></div>
+  <div class="wrap" style="margin-top:8px"><table id="btt"></table></div>
+  <div class="sub" id="btn" style="margin-top:6px"></div>
+</div>
+
+<h2>Historique</h2>
+<div class="card wrap"><table id="hist"></table></div>
+<h2>Journal</h2>
+<div class="card"><div class="log" id="log"></div></div>
+
+<script>
+(function(){
+var $=function(i){return document.getElementById(i)},KEY='',timer=null,btId=null;
+try{KEY=localStorage.getItem('smcrt_key')||''}catch(e){}
+$('key').value=KEY;
+function api(m,p,b){return fetch(p,{method:m,headers:{'x-api-key':KEY,'Content-Type':'application/json'},body:b?JSON.stringify(b):undefined}).then(function(r){return r.json()})}
+function f(x,d){return x==null?'—':Number(x).toFixed(d==null?2:d)}
+function pl(x){return '<span class="'+(x>0?'pos':x<0?'neg':'')+'">'+(x>0?'+':'')+f(x)+' $</span>'}
+function esc(s){return String(s==null?'':s).replace(/[&<>]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;'}[c]})}
+$('save').onclick=function(){KEY=$('key').value.trim();try{localStorage.setItem('smcrt_key',KEY)}catch(e){}load()};
+var S=null;
+function load(){
+  if(!KEY)return;
+  api('GET','/api/scalper/status').then(function(s){
+    if(!s||!s.ok){$('state').className='tag off';$('state').textContent=(s&&s.error)||'clé refusée';return}
+    S=s;$('state').textContent=s.state;$('state').className='tag '+(s.connected?(s.active?'on':'w'):'off');
+    $('bal').textContent=s.balance!=null?f(s.balance)+' $':'';
+    $('toggle').textContent=s.active?'Arrêter':'Démarrer';$('live').checked=!!s.config.liveExecution;
+    $('dpl').innerHTML=pl(s.dayPnl);$('exp').textContent=f(s.exposure,1)+' %';$('ttr').textContent=s.total.trades+' · '+f(s.total.winrate,1)+' %';
+    $('pairs').innerHTML=s.pairs.map(function(p){
+      var d=p.dir?'<b class="'+p.dir.toLowerCase()+'">'+p.dir+'</b>':'';
+      var cls=p.phase==='PENDING'?'a':p.phase==='OPEN'?'on':p.phase==='TP1'?'on':p.phase==='WAIT'?'w':'';
+      var k=p.entry?'<div class="k"><div><small>Entrée</small><b>'+f(p.entry)+'</b></div><div><small>SL</small><b>'+f(p.sl)+'</b></div><div><small>RR (TP2)</small><b>'+f(p.rr2)+'</b></div><div><small>TP1 (50 %)</small><b>'+f(p.tp1)+'</b></div><div><small>TP2</small><b>'+f(p.tp2)+'</b></div><div><small>Score</small><b>'+(p.score!=null?p.score+'/100':'—')+'</b></div></div>':'';
+      var btn=p.cancellable?'<button class="r" style="margin-top:8px" data-c="'+p.symbol+'">'+(p.phase==='PENDING'?'Annuler l’ordre':'Fermer le trade')+'</button>':'';
+      return '<div class="card"><div class="row sp"><b>'+p.symbol+' '+d+'</b><span class="tag '+cls+'">'+esc(p.state)+'</span></div><div class="sub" style="margin-top:4px">'+esc(p.info)+(p.broker?' · '+esc(p.broker):'')+'</div>'+k+btn+'</div>';
+    }).join('');
+    Array.prototype.forEach.call(document.querySelectorAll('[data-c]'),function(b){b.onclick=function(){if(!confirm('Confirmer ?'))return;b.disabled=true;api('POST','/api/crt/cancel',{symbol:b.getAttribute('data-c')}).then(function(r){if(!r.ok)alert(r.error||'échec');load()})}});
+    var h='<tr><th>Paire</th><th>Trades</th><th>Win</th><th>TP1</th><th>TP2</th><th>SL</th><th>BE</th><th>P/L</th></tr>';
+    s.pairs.forEach(function(p){var t=p.stats;h+='<tr><td>'+p.symbol+'</td><td>'+t.trades+'</td><td>'+f(t.winrate,1)+' %</td><td>'+(t.tp1||0)+'</td><td>'+(t.tp2||0)+'</td><td>'+(t.sl||0)+'</td><td>'+(t.be||0)+'</td><td>'+pl(t.pnl)+'</td></tr>'});
+    h+='<tr><td><b>Total</b></td><td>'+s.total.trades+'</td><td>'+f(s.total.winrate,1)+' %</td><td colspan="4"></td><td>'+pl(s.total.pnl)+'</td></tr>';$('stats').innerHTML=h;
+    var q='<tr><th>Paire</th><th>Sens</th><th>Entrée</th><th>Résultat</th><th>P/L</th></tr>';
+    s.history.slice(0,20).forEach(function(x){q+='<tr><td>'+x.symbol+'</td><td>'+x.dir+'</td><td>'+f(x.entry)+'</td><td>'+x.res+'</td><td>'+pl(x.pnl)+'</td></tr>'});$('hist').innerHTML=q;
+    $('log').innerHTML=s.logs.map(function(l){return esc(l.t.slice(11,19)+' '+l.msg)}).join('<br>');
+  }).catch(function(){$('state').className='tag off';$('state').textContent='serveur injoignable'});
+}
+$('toggle').onclick=function(){api('POST','/api/scalper/active',{active:!(S&&S.active)}).then(load)};
+$('live').onchange=function(){api('POST','/api/scalper/config',{liveExecution:$('live').checked}).then(load)};
+$('stop').onclick=function(){if(confirm('Fermer tout et arrêter le robot ?'))api('POST','/api/mentor/emergency-stop',{}).then(load)};
+$('conn').onclick=function(){api('GET','/api/ctrader/connect-url').then(function(r){if(r&&r.url)location.href=r.url;else alert((r&&r.error)||'échec')})};
+$('accb').onclick=function(){api('POST','/api/ctrader/account',{accountId:$('acc').value.trim()}).then(function(r){alert(r.ok?'Compte choisi':(r.error||'échec'));load()})};
+$('bt').onclick=function(){$('bt').disabled=true;$('btt').innerHTML='';$('btn').textContent='';api('POST','/api/crt/backtest',{months:Number($('months').value)}).then(function(r){if(!r.ok){alert(r.error||'échec');$('bt').disabled=false;return}btId=r.id;poll()}).catch(function(){$('bt').disabled=false})};
+function poll(){
+  api('GET','/api/crt/backtest/'+btId).then(function(j){
+    if(!j.ok){$('btm').textContent=j.error||'';$('bt').disabled=false;return}
+    $('btp').style.width=Math.round((j.progress||0)*100)+'%';$('btm').textContent=j.status==='error'?('Erreur : '+j.error):j.msg;
+    if(j.status==='run'){setTimeout(poll,2500);return}
+    $('bt').disabled=false;if(!j.result)return;
+    var h='<tr><th>Paire</th><th>Trades</th><th>Win %</th><th>TP1</th><th>TP2</th><th>SL</th><th>BE</th><th>RR total</th><th>/sem</th></tr>';
+    j.result.pairs.forEach(function(p){if(!p.stats){h+='<tr><td>'+p.symbol+'</td><td colspan="8">'+esc(p.error)+'</td></tr>';return}var t=p.stats;h+='<tr><td>'+p.symbol+'</td><td>'+t.trades+'</td><td>'+f(t.winrate,1)+'</td><td>'+t.tp1+'</td><td>'+t.tp2+'</td><td>'+t.sl+'</td><td>'+t.be+'</td><td>'+f(t.rrTotal)+' R</td><td>'+f(t.perWeek,1)+'</td></tr>'});
+    var T=j.result.total;if(T)h+='<tr><td><b>Total</b></td><td>'+T.trades+'</td><td>'+f(T.winrate,1)+'</td><td>'+T.tp1+'</td><td>'+T.tp2+'</td><td>'+T.sl+'</td><td>'+T.be+'</td><td>'+f(T.rrTotal)+' R</td><td>'+f(T.perWeek,1)+'</td></tr>';
+    $('btt').innerHTML=h;$('btn').textContent=j.result.note;
+  }).catch(function(){setTimeout(poll,4000)});
+}
+load();timer=setInterval(load,3000);
+})();
+</script>
+</body>
+</html>
