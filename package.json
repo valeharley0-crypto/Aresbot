@@ -1,0 +1,17 @@
+{
+  "name": "smc-bot",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Robot SMC (biais H1/H4, M15 direction + POI, M5 entrée) pour XAUUSD et EURUSD via cTrader Open API",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ws": "^8.17.1"
+  }
+}
